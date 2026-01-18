@@ -6,8 +6,6 @@ import { z7iGetFirstName } from './lib/z7i-service.js';
 import type { QuestionData } from './lib/ai-service.js';
 import { Prisma } from '@prisma/client';
 
-const ADMIN_EMAIL = 'logeshms.cbe@gmail.com';
-
 function setCorsHeaders(res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -24,9 +22,9 @@ function getAuth(req: VercelRequest) {
 async function isAdmin(userId: string): Promise<boolean> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { email: true }
+    select: { isOwner: true }
   });
-  return user?.email === ADMIN_EMAIL;
+  return Boolean(user?.isOwner);
 }
 
 const MCQ_TYPES = ['MCQ', 'SINGLE'];

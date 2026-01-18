@@ -2,10 +2,9 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from './lib/prisma.js';
 import { hashPassword, verifyPassword, generateToken, verifyToken, encryptZ7iPassword, decryptZ7iPassword } from './lib/auth.js';
 import { z7iLogin } from './lib/z7i-service.js';
+import { generateCustomTestQuestions } from './lib/ai-service.js';
 
 const HEX_COLOR_REGEX = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
-const ADMIN_EMAIL = 'logeshms.cbe@gmail.com';
-
 function setCorsHeaders(res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -22,9 +21,9 @@ function getAuth(req: VercelRequest) {
 async function isAdmin(userId: string): Promise<boolean> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { email: true }
+    select: { isOwner: true }
   });
-  return user?.email === ADMIN_EMAIL;
+  return Boolean(user?.isOwner);
 }
 
 const MCQ_TYPES = ['MCQ', 'SINGLE'];
@@ -84,121 +83,6 @@ function isAnswerMatch(studentAnswer: string, correctAnswer: string, questionTyp
   return studentAnswer.trim().toLowerCase() === correctAnswer.trim().toLowerCase();
 }
 
-type GeminiResponse = {
-  candidates?: Array<{
-    content?: { parts?: Array<{ text?: string }> };
-  }>;
-  error?: { message?: string };
-};
-
-type GeneratedQuestion = {
-  subject?: string;
-  chapter?: string;
-  difficulty?: string;
-  type: string;
-  question: string;
-  options?: string[];
-  answer: string;
-  marksPositive?: number;
-  marksNegative?: number;
-};
-
-function resolveGeminiModel(modelId: string) {
-  if (modelId === '3-12b') return 'gemini-3-12b';
-  if (modelId === 'lite') return 'gemini-2.5-flash-lite';
-  return 'gemini-2.5-flash';
-}
-
-function getGeminiApiKey() {
-  return process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_0;
-}
-
-function extractJsonBlock(text: string) {
-  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
-  if (fenced) return fenced[1].trim();
-  const firstBrace = text.indexOf('{');
-  const lastBrace = text.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    return text.slice(firstBrace, lastBrace + 1);
-  }
-  throw new Error('Unable to parse AI response.');
-}
-
-async function generateCustomQuestions({
-  prompt,
-  modelId,
-}: {
-  prompt: string;
-  modelId: string;
-}) {
-  const apiKey = getGeminiApiKey();
-  if (!apiKey) {
-    throw new Error('Gemini API key is missing. Set GEMINI_API_KEY.');
-  }
-
-  const modelName = resolveGeminiModel(modelId);
-  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-
-  const systemPrompt = `
-You are an expert test creator for JEE-style exams.
-Return ONLY valid JSON without markdown.
-Output format:
-{
-  "questions": [
-    {
-      "subject": "Physics",
-      "chapter": "Kinematics",
-      "difficulty": "easy|medium|hard",
-      "type": "MCQ" or "NAT",
-      "question": "Question text in HTML-safe plain text",
-      "options": ["Option A", "Option B", "Option C", "Option D"],
-      "answer": "A/B/C/D or numeric value as string",
-      "marksPositive": 4,
-      "marksNegative": 1
-    }
-  ]
-}
-Rules:
-- If type is NAT, omit options.
-- If type is MCQ, include exactly 4 options.
-- Ensure answer matches the type.
-- Keep HTML minimal (use <br/> for line breaks if needed).
-`;
-
-  const response = await fetch(apiUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: `${systemPrompt}\n\nUser prompt:\n${prompt}` }] }],
-      generationConfig: {
-        temperature: 0.4,
-        topK: 40,
-        topP: 0.9,
-        maxOutputTokens: 6000,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const errorPayload = await response.json().catch(() => ({})) as GeminiResponse;
-    throw new Error(errorPayload.error?.message || 'Failed to generate questions.');
-  }
-
-  const data = await response.json() as GeminiResponse;
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) {
-    throw new Error('AI did not return any questions.');
-  }
-
-  const jsonText = extractJsonBlock(text);
-  const parsed = JSON.parse(jsonText) as { questions: GeneratedQuestion[] };
-  if (!parsed.questions || !Array.isArray(parsed.questions)) {
-    throw new Error('AI response did not include questions.');
-  }
-
-  return parsed.questions;
-}
-
 async function handleRegister(req: VercelRequest, res: VercelResponse) {
   const { email, password, name } = req.body;
 
@@ -231,6 +115,7 @@ async function handleRegister(req: VercelRequest, res: VercelResponse) {
         email: true,
         name: true,
         createdAt: true,
+        isOwner: true,
         themeMode: true,
         themeCustomEnabled: true,
         themeAccent: true,
@@ -289,6 +174,7 @@ async function handleLogin(req: VercelRequest, res: VercelResponse) {
         id: user.id,
         email: user.email,
         name: user.name,
+        isOwner: user.isOwner,
         z7iLinked: !!user.z7iAccount,
         z7iEnrollment: user.z7iAccount?.enrollmentNo,
         lastSyncAt: user.z7iAccount?.lastSyncAt,
@@ -350,6 +236,7 @@ async function handleMe(req: VercelRequest, res: VercelResponse) {
         id: user.id,
         email: user.email,
         name: user.name,
+        isOwner: user.isOwner,
         z7iLinked: !!user.z7iAccount,
         z7iEnrollment: user.z7iAccount?.enrollmentNo,
         lastSyncAt: user.z7iAccount?.lastSyncAt,
@@ -728,7 +615,7 @@ async function handleCustomTestsCreate(req: VercelRequest, res: VercelResponse) 
   }
 
   try {
-    const questions = await generateCustomQuestions({ prompt, modelId });
+    const questions = await generateCustomTestQuestions({ prompt, modelId });
     if (questions.length === 0) {
       return res.status(400).json({ error: 'AI returned no questions.' });
     }

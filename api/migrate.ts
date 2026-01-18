@@ -44,7 +44,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         "themeUnattempted" TEXT,
         "lastIpAddress" TEXT,
         "canUseAiSolutions" BOOLEAN NOT NULL DEFAULT FALSE,
-        "canAccessAiChatRoom" BOOLEAN NOT NULL DEFAULT TRUE
+        "canAccessAiChatRoom" BOOLEAN NOT NULL DEFAULT TRUE,
+        "isOwner" BOOLEAN NOT NULL DEFAULT FALSE
       )
     `;
 
@@ -59,6 +60,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await sql`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "themeError" TEXT`;
     await sql`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "themeWarning" TEXT`;
     await sql`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "themeUnattempted" TEXT`;
+    await sql`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "isOwner" BOOLEAN NOT NULL DEFAULT FALSE`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS "Session" (

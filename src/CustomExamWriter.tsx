@@ -12,6 +12,7 @@ import {
   XCircle
 } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
+import { renderLatexInHtml } from './utils/latex';
 
 const API_BASE = import.meta.env.PROD ? '/api' : 'http://localhost:3000/api';
 
@@ -194,7 +195,7 @@ function OptionButton({
       aria-pressed={isSelected}
     >
       <span className="option-label">{label}</span>
-      <div className="option-content" dangerouslySetInnerHTML={{ __html: html }} />
+      <div className="option-content" dangerouslySetInnerHTML={{ __html: renderLatexInHtml(html) }} />
       {isSelected && <span className="option-selected-indicator" aria-hidden="true" />}
     </button>
   );
@@ -213,7 +214,7 @@ function QuestionStatusBadge({
 }) {
   return (
     <button
-      className={`question-badge ${status} ${isActive ? 'active' : ''}`}
+      className={`exam-nav-badge ${status} ${isActive ? 'active' : ''}`}
       onClick={onClick}
       type="button"
     >
@@ -660,6 +661,9 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
         <div className="exam-title-section">
           <h1 className="exam-title">{test.name}</h1>
           <span className="exam-package">Custom Test</span>
+          <span className="exam-progress">
+            Question {currentIndex + 1} / {questions.length}
+          </span>
         </div>
 
         <div className="exam-controls">
@@ -681,6 +685,7 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
             <div className="nav-stats">
               <span className="stat-answered">{answered} answered</span>
               <span className="stat-flagged">{flagged} flagged</span>
+              <span className="stat-unattempted">{unattempted} left</span>
             </div>
           </div>
 
@@ -733,7 +738,12 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
               <div className="question-header">
                 <div className="question-meta">
                   <span className="question-number">Question {currentQuestion.questionOrder}</span>
-                  {currentQuestion.subject && <span className="question-subject">{currentQuestion.subject}</span>}
+                  <div className="question-tags">
+                    {currentQuestion.subject && <span className="question-tag">{currentQuestion.subject}</span>}
+                    {currentQuestion.chapter && <span className="question-tag">{currentQuestion.chapter}</span>}
+                    {currentQuestion.difficulty && <span className="question-tag">{currentQuestion.difficulty}</span>}
+                    <span className="question-tag">{currentQuestion.questionType.toUpperCase()}</span>
+                  </div>
                   <span className="question-marks">+{currentQuestion.marksPositive} / -{currentQuestion.marksNegative}</span>
                 </div>
                 <button
@@ -748,7 +758,7 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
               <div className="question-content">
                 <div
                   className="question-html"
-                  dangerouslySetInnerHTML={{ __html: currentQuestion.questionHtml }}
+                  dangerouslySetInnerHTML={{ __html: renderLatexInHtml(currentQuestion.questionHtml) }}
                 />
               </div>
 
