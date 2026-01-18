@@ -760,7 +760,7 @@ export async function generateCustomTestQuestions({
     return value.toUpperCase().includes('NAT') ? 'NAT' : 'MCQ';
   };
   const resolveQuestionModel = (difficulty?: string) =>
-    resolveDifficulty(difficulty) === 'hard' ? 'gemini-3-flash' : 'gemini-2.5-flash';
+    resolveDifficulty(difficulty) === 'hard' ? 'gemini-3-flash-preview' : 'gemini-2.5-flash';
 
   const callGemini = async ({
     modelName,
