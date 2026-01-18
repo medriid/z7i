@@ -7088,16 +7088,15 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
   const [customTestMessage, setCustomTestMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [customTestName, setCustomTestName] = useState('');
   const [customTestTimeLimit, setCustomTestTimeLimit] = useState(180);
-  const [customTestModel, setCustomTestModel] = useState('flash');
+  const [customTestModel, setCustomTestModel] = useState('auto');
   const [customTestPrompt, setCustomTestPrompt] = useState('');
+  const [customTestLogs, setCustomTestLogs] = useState<Array<{ timestamp: string; message: string; level: 'info' | 'success' | 'error' }>>([]);
   const [customExamTestId, setCustomExamTestId] = useState<string | null>(null);
   const [customResultsAttemptId, setCustomResultsAttemptId] = useState<string | null>(null);
   
   const isOwnerUser = Boolean(user.isOwner);
   const customTestModels = [
-    { id: 'flash', label: 'Gemini 2.5 Flash' },
-    { id: 'lite', label: 'Gemini 2.5 Flash Lite' },
-    { id: '3-12b', label: 'Gemini 3 12B' },
+    { id: 'auto', label: 'Auto (2.5 Flash + 3 Flash)' },
   ];
   const sortedTests = useMemo(() => {
     return [...tests].sort((a, b) => new Date(b.submitDate).getTime() - new Date(a.submitDate).getTime());
@@ -7252,6 +7251,10 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
       return;
     }
     setCreatingCustomTest(true);
+    setCustomTestLogs([
+      { timestamp: new Date().toISOString(), message: 'Starting custom test creation.', level: 'info' },
+      { timestamp: new Date().toISOString(), message: 'Sending instructions to the server.', level: 'info' },
+    ]);
     try {
       const data = await apiRequest('/auth?action=custom-tests-create', {
         method: 'POST',
@@ -7263,15 +7266,33 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
         }),
       });
       if (data.success) {
+        const serverLogs = Array.isArray(data.logs)
+          ? data.logs.map((log: { timestamp: string; message: string }) => ({
+              timestamp: log.timestamp,
+              message: log.message,
+              level: 'info' as const,
+            }))
+          : [];
+        setCustomTestLogs([
+          ...serverLogs,
+          { timestamp: new Date().toISOString(), message: 'Custom test saved successfully.', level: 'success' },
+        ]);
         showCustomMessage('success', 'Custom test created. Ready for students!');
         setCustomTestName('');
         setCustomTestPrompt('');
-        setShowCustomTestPanel(false);
         await loadCustomTests();
       } else {
+        setCustomTestLogs(prev => [
+          ...prev,
+          { timestamp: new Date().toISOString(), message: data.error || 'Failed to create custom test.', level: 'error' },
+        ]);
         showCustomMessage('error', data.error || 'Failed to create custom test.');
       }
     } catch {
+      setCustomTestLogs(prev => [
+        ...prev,
+        { timestamp: new Date().toISOString(), message: 'Failed to create custom test.', level: 'error' },
+      ]);
       showCustomMessage('error', 'Failed to create custom test.');
     } finally {
       setCreatingCustomTest(false);
@@ -7635,6 +7656,28 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
                 placeholder="Tell the AI how many questions, subjects, chapters, difficulty levels, and question types."
               />
             </div>
+            <div className="custom-test-log">
+              <div className="custom-test-log-header">
+                <span>Creation Log</span>
+                {creatingCustomTest && <span className="custom-test-log-status">Working...</span>}
+              </div>
+              <div className="custom-test-log-body">
+                {customTestLogs.length === 0 ? (
+                  <div className="custom-test-log-empty">Log entries will appear here while the test is generated.</div>
+                ) : (
+                  <ul>
+                    {customTestLogs.map((log, index) => (
+                      <li key={`${log.timestamp}-${index}`} className={`custom-test-log-item ${log.level}`}>
+                        <span className="custom-test-log-time">
+                          {new Date(log.timestamp).toLocaleTimeString()}
+                        </span>
+                        <span className="custom-test-log-message">{log.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => setShowCustomTestPanel(false)}>
                 Cancel
@@ -7696,7 +7739,13 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
                 </button>
               )}
               {isOwnerUser && (
-                <button className="btn btn-secondary" onClick={() => setShowCustomTestPanel(prev => !prev)}>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setCustomTestLogs([]);
+                    setShowCustomTestPanel(prev => !prev);
+                  }}
+                >
                   <Sparkles size={16} />
                   Custom Test
                 </button>
