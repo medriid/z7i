@@ -32,6 +32,9 @@ model User {
 
   aiChatSessions AiChatSession[]
   aiChatConfigs  AiChatPersonalityConfig[]
+
+  customTestsCreated CustomTest[] @relation("CustomTestsCreated")
+  customTestAttempts CustomTestAttempt[]
 }
 
 model Session {
@@ -241,6 +244,90 @@ model QuestionNote {
   updatedAt       DateTime  @updatedAt
   
   @@unique([userId, questionId])
+}
+
+model CustomTest {
+  id              String    @id @default(cuid())
+  name            String
+  prompt          String
+  modelId         String
+  timeLimit       Int       // in minutes
+  totalQuestions  Int
+  status          String    @default("ready") // ready, generating, failed
+  createdByUserId String?
+  createdByUser   User?     @relation("CustomTestsCreated", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  questions       CustomTestQuestion[]
+  attempts        CustomTestAttempt[]
+}
+
+model CustomTestQuestion {
+  id             String    @id @default(cuid())
+  testId         String
+  test           CustomTest @relation(fields: [testId], references: [id], onDelete: Cascade)
+  questionOrder  Int
+  subject        String?
+  chapter        String?
+  difficulty     String?
+  questionType   String
+  questionHtml   String
+  option1        String?
+  option2        String?
+  option3        String?
+  option4        String?
+  correctAnswer  String
+  marksPositive  Float     @default(4)
+  marksNegative  Float     @default(1)
+  createdAt      DateTime  @default(now())
+
+  responses      CustomTestResponse[]
+
+  @@unique([testId, questionOrder])
+}
+
+model CustomTestAttempt {
+  id                  String    @id @default(cuid())
+  testId              String
+  test                CustomTest @relation(fields: [testId], references: [id], onDelete: Cascade)
+  userId              String
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status              String    @default("in_progress") // in_progress, submitted
+  startedAt           DateTime  @default(now())
+  submittedAt         DateTime?
+  timeTaken           Int?      // seconds
+  currentQuestionIndex Int      @default(0)
+  correct             Int       @default(0)
+  incorrect           Int       @default(0)
+  unattempted         Int       @default(0)
+  totalScore          Float     @default(0)
+  maxScore            Int?
+  accuracy            Int?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  responses           CustomTestResponse[]
+
+  @@unique([testId, userId])
+}
+
+model CustomTestResponse {
+  id            String    @id @default(cuid())
+  attemptId     String
+  attempt       CustomTestAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId    String
+  question      CustomTestQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answer        String?
+  flagged       Boolean   @default(false)
+  timeSpent     Int       @default(0)
+  visited       Boolean   @default(false)
+  answerStatus  String?
+  marksObtained Float?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([attemptId, questionId])
 }
 
 model QuestionComment {
