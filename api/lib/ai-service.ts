@@ -610,36 +610,81 @@ function resolveCustomTestModel(modelId: string): string {
   return 'gemini-2.5-flash';
 }
 
-function extractJsonBlock(text: string) {
+function extractJsonCandidates(text: string): string[] {
+  const candidates = new Set<string>();
+
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) return fenced[1].trim();
+  if (fenced?.[1]) {
+    const block = fenced[1].trim();
+    if (block) candidates.add(block);
+  }
 
   const trimmed = text.trim();
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    if (trimmed.endsWith('}') || trimmed.endsWith(']')) {
-      return trimmed;
+  if (
+    (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+    (trimmed.startsWith('[') && trimmed.endsWith(']'))
+  ) {
+    candidates.add(trimmed);
+  }
+
+  const blocks = extractBalancedJsonBlocks(text);
+  for (const block of blocks) {
+    candidates.add(block);
+  }
+
+  return Array.from(candidates);
+}
+
+function extractBalancedJsonBlocks(text: string): string[] {
+  const results: string[] = [];
+  const stack: string[] = [];
+  let startIndex: number | null = null;
+  let inString = false;
+  let escapeNext = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (char === '\\' && inString) {
+      escapeNext = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (char === '{' || char === '[') {
+      if (stack.length === 0) {
+        startIndex = i;
+      }
+      stack.push(char);
+      continue;
+    }
+
+    if (char === '}' || char === ']') {
+      if (stack.length === 0) continue;
+      const last = stack[stack.length - 1];
+      const isMatch = (char === '}' && last === '{') || (char === ']' && last === '[');
+      if (!isMatch) continue;
+      stack.pop();
+      if (stack.length === 0 && startIndex !== null) {
+        const block = text.slice(startIndex, i + 1).trim();
+        if (block) results.push(block);
+        startIndex = null;
+      }
     }
   }
 
-  const firstBrace = text.indexOf('{');
-  const firstBracket = text.indexOf('[');
-  const hasBrace = firstBrace !== -1;
-  const hasBracket = firstBracket !== -1;
-
-  if (!hasBrace && !hasBracket) {
-    throw new Error('Unable to parse AI response.');
-  }
-
-  const startIndex = hasBrace && hasBracket ? Math.min(firstBrace, firstBracket) : hasBrace ? firstBrace : firstBracket;
-  const startChar = text[startIndex];
-  const endChar = startChar === '[' ? ']' : '}';
-  const endIndex = text.lastIndexOf(endChar);
-
-  if (endIndex !== -1 && endIndex > startIndex) {
-    return text.slice(startIndex, endIndex + 1);
-  }
-
-  throw new Error('Unable to parse AI response.');
+  return results;
 }
 
 export async function generateChatResponse({
@@ -862,12 +907,22 @@ export async function generateCustomTestQuestions({
   };
 
   const parseJsonPayload = <T>(text: string, errorMessage: string): T => {
-    const jsonText = extractJsonBlock(text);
-    try {
-      return JSON.parse(jsonText) as T;
-    } catch (error) {
-      throw new Error(`${errorMessage}: ${(error as Error).message}`);
+    const candidates = extractJsonCandidates(text);
+    if (candidates.length === 0) {
+      throw new Error(`${errorMessage}: Unable to locate JSON in AI response.`);
     }
+
+    const errors: string[] = [];
+    for (const candidate of candidates) {
+      const sanitized = candidate.replace(/,\s*([}\]])/g, '$1');
+      try {
+        return JSON.parse(sanitized) as T;
+      } catch (error) {
+        errors.push((error as Error).message);
+      }
+    }
+
+    throw new Error(`${errorMessage}: ${errors[0] || 'Unable to parse JSON.'}`);
   };
 
   const generateOutline = async () => {
