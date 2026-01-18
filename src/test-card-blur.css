@@ -1,0 +1,7 @@
+.test-card-blur {
+  filter: blur(2px) grayscale(0.7) brightness(0.8);
+  opacity: 0.6;
+  pointer-events: none;
+  user-select: none;
+  transition: filter 0.2s, opacity 0.2s;
+}
