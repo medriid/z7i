@@ -531,6 +531,43 @@ export interface ChatMessageInput {
   content: string;
 }
 
+export interface ChatAttachmentInput {
+  name?: string;
+  type?: string;
+  dataUrl?: string;
+  url?: string;
+}
+
+function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | null {
+  const match = /^data:(.+?);base64,(.+)$/.exec(dataUrl);
+  if (!match) return null;
+  return { mimeType: match[1], data: match[2] };
+}
+
+async function buildChatAttachmentParts(
+  attachments: ChatAttachmentInput[]
+): Promise<Array<{ inline_data: { mime_type: string; data: string } }>> {
+  const parts: Array<{ inline_data: { mime_type: string; data: string } }> = [];
+  for (const attachment of attachments.slice(0, 4)) {
+    if (attachment.dataUrl) {
+      const parsed = parseDataUrl(attachment.dataUrl);
+      if (parsed) {
+        parts.push({ inline_data: { mime_type: parsed.mimeType, data: parsed.data } });
+      }
+      continue;
+    }
+
+    if (attachment.url) {
+      const inlineData = await fetchImageInlineData(attachment.url);
+      if (inlineData) {
+        parts.push(inlineData);
+      }
+    }
+  }
+
+  return parts;
+}
+
 function resolveChatModel(modelId?: string): string {
   if (modelId && modelId.startsWith('gemini-')) {
     return modelId;
@@ -542,10 +579,12 @@ export async function generateChatResponse({
   messages,
   systemPrompt,
   modelId,
+  attachments,
 }: {
   messages: ChatMessageInput[];
   systemPrompt?: string;
   modelId?: string;
+  attachments?: ChatAttachmentInput[];
 }): Promise<{ text: string; modelUsed: string }> {
   if (!isGeminiConfigured()) {
     throw new Error(
@@ -563,6 +602,26 @@ export async function generateChatResponse({
       role: message.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: message.content }],
     }));
+
+  if (attachments && attachments.length > 0) {
+    const attachmentParts = await buildChatAttachmentParts(attachments);
+    if (attachmentParts.length > 0) {
+      let targetIndex = -1;
+      for (let i = contents.length - 1; i >= 0; i -= 1) {
+        if (contents[i].role === 'user') {
+          targetIndex = i;
+          break;
+        }
+      }
+
+      if (targetIndex === -1) {
+        contents.push({ role: 'user', parts: [] });
+        targetIndex = contents.length - 1;
+      }
+
+      contents[targetIndex].parts.push(...attachmentParts);
+    }
+  }
 
   const requestBody: Record<string, unknown> = {
     contents,
