@@ -27,8 +27,6 @@ import './test-card-blur.css';
 
 import { AiDoubtPrompt } from './AiDoubtPrompt';
 
-const ADMIN_EMAIL = 'logeshms.cbe@gmail.com';
-
 const VALID_ROUTES = ['/', '/dashboard', '/bookmarks', '/forum', '/pyp', '/time-intel', '/owner', '/ai-chats'];
 
 function isValidRoute(path: string): boolean {
@@ -62,6 +60,7 @@ interface UserType {
   id: string;
   email: string;
   name: string | null;
+  isOwner?: boolean;
   z7iLinked: boolean;
   z7iEnrollment?: string;
   lastSyncAt?: string;
@@ -7094,7 +7093,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
   const [customExamTestId, setCustomExamTestId] = useState<string | null>(null);
   const [customResultsAttemptId, setCustomResultsAttemptId] = useState<string | null>(null);
   
-  const isOwnerUser = user.email === ADMIN_EMAIL;
+  const isOwnerUser = Boolean(user.isOwner);
   const customTestModels = [
     { id: 'flash', label: 'Gemini 2.5 Flash' },
     { id: 'lite', label: 'Gemini 2.5 Flash Lite' },
@@ -7577,60 +7576,73 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
       )}
 
       {showCustomTestPanel && isOwnerUser && (
-        <div className="custom-test-panel">
-          <div className="form-row">
+        <div
+          className="modal-overlay"
+          onClick={(event) => event.target === event.currentTarget && setShowCustomTestPanel(false)}
+        >
+          <div className="modal custom-test-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title">
+                <Sparkles size={18} /> Create Custom Test
+              </h2>
+              <button className="modal-close" onClick={() => setShowCustomTestPanel(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="form-label">Test name</label>
+                <input
+                  className="form-input"
+                  value={customTestName}
+                  onChange={(event) => setCustomTestName(event.target.value)}
+                  placeholder="e.g. JEE Mixed Drill #1"
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Time limit (minutes)</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  min={10}
+                  max={300}
+                  value={customTestTimeLimit}
+                  onChange={(event) => setCustomTestTimeLimit(Number(event.target.value))}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Model</label>
+                <select
+                  className="form-input"
+                  value={customTestModel}
+                  onChange={(event) => setCustomTestModel(event.target.value)}
+                >
+                  {customTestModels.map(model => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
             <div className="form-group">
-              <label className="form-label">Test name</label>
-              <input
+              <label className="form-label">Prompt</label>
+              <textarea
                 className="form-input"
-                value={customTestName}
-                onChange={(event) => setCustomTestName(event.target.value)}
-                placeholder="e.g. JEE Mixed Drill #1"
+                rows={4}
+                value={customTestPrompt}
+                onChange={(event) => setCustomTestPrompt(event.target.value)}
+                placeholder="Tell the AI how many questions, subjects, chapters, difficulty levels, and question types."
               />
             </div>
-            <div className="form-group">
-              <label className="form-label">Time limit (minutes)</label>
-              <input
-                className="form-input"
-                type="number"
-                min={10}
-                max={300}
-                value={customTestTimeLimit}
-                onChange={(event) => setCustomTestTimeLimit(Number(event.target.value))}
-              />
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setShowCustomTestPanel(false)}>
+                Cancel
+              </button>
+              <button className="btn btn-primary" onClick={handleCreateCustomTest} disabled={creatingCustomTest}>
+                {creatingCustomTest ? 'Creating...' : 'Create Test'}
+              </button>
             </div>
-            <div className="form-group">
-              <label className="form-label">Model</label>
-              <select
-                className="form-input"
-                value={customTestModel}
-                onChange={(event) => setCustomTestModel(event.target.value)}
-              >
-                {customTestModels.map(model => (
-                  <option key={model.id} value={model.id}>
-                    {model.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Prompt</label>
-            <textarea
-              className="form-input"
-              rows={4}
-              value={customTestPrompt}
-              onChange={(event) => setCustomTestPrompt(event.target.value)}
-              placeholder="Tell the AI how many questions, subjects, chapters, difficulty levels, and question types."
-            />
-          </div>
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
-            <button className="btn btn-secondary" onClick={() => setShowCustomTestPanel(false)}>
-              Cancel
-            </button>
-            <button className="btn btn-primary" onClick={handleCreateCustomTest} disabled={creatingCustomTest}>
-              {creatingCustomTest ? 'Creating...' : 'Create Test'}
-            </button>
           </div>
         </div>
       )}

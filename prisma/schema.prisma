@@ -25,6 +25,7 @@ model User {
   lastIpAddress       String?   // Last known IP address
   canUseAiSolutions   Boolean   @default(false) // Permission to use AI solutions
   canAccessAiChatRoom Boolean   @default(true) // Permission to access AI chatroom
+  isOwner             Boolean   @default(false)
   
   z7iAccount    Z7iAccount?
   
