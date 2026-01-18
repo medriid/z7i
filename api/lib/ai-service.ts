@@ -93,7 +93,7 @@ export async function generateSolutionsBatch(
 
 function getGeminiApiKeys(): string[] {
   const keys: string[] = [];
-  for (let i = 0; i < 5; ++i) {
+  for (let i = 0; i < 6; ++i) {
     const key = process.env[`GEMINI_API_KEY${i}`] || process.env[`GEMINI_API_KEY_${i}`];
     if (key) keys.push(key);
   }
@@ -604,6 +604,8 @@ function resolveChatModel(modelId?: string): string {
 
 function resolveCustomTestModel(modelId: string): string {
   if (modelId === '3-12b') return 'gemini-3-12b';
+  if (modelId === '3-flash') return 'gemini-3-flash-preview';
+  if (modelId === '2.5-flash') return 'gemini-2.5-flash';
   if (modelId === 'lite') return 'gemini-2.5-flash-lite';
   return 'gemini-2.5-flash';
 }
@@ -769,6 +771,7 @@ export async function generateCustomTestQuestions({
   };
 
   const apiKeys = getGeminiApiKeys();
+  const modelPreference = modelId === 'auto' ? 'auto' : resolveCustomTestModel(modelId);
   const resolveDifficulty = (value?: string) => {
     if (!value) return 'medium';
     const normalized = value.toLowerCase();
@@ -780,8 +783,10 @@ export async function generateCustomTestQuestions({
     if (!value) return 'MCQ';
     return value.toUpperCase().includes('NAT') ? 'NAT' : 'MCQ';
   };
-  const resolveQuestionModel = (difficulty?: string) =>
-    resolveDifficulty(difficulty) === 'hard' ? 'gemini-3-flash-preview' : 'gemini-2.5-flash';
+  const resolveQuestionModel = (difficulty?: string) => {
+    if (modelPreference !== 'auto') return modelPreference;
+    return resolveDifficulty(difficulty) === 'hard' ? 'gemini-3-flash-preview' : 'gemini-2.5-flash';
+  };
 
   const callGemini = async ({
     modelName,
@@ -866,7 +871,8 @@ export async function generateCustomTestQuestions({
   };
 
   const generateOutline = async () => {
-    addLog('Planning question blueprint with Gemini 2.5 Flash Lite.');
+    const outlineModelName = modelPreference === 'auto' ? 'gemini-2.5-flash-lite' : modelPreference;
+    addLog(`Planning question blueprint with ${outlineModelName}.`);
     const systemPrompt = `
 You are an expert test planner for JEE-style exams.
 Return ONLY valid JSON without markdown.
@@ -892,7 +898,7 @@ Rules:
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const text = await callGemini({
-          modelName: 'gemini-2.5-flash-lite',
+          modelName: outlineModelName,
           systemPrompt,
           userPrompt: `User prompt:\n${prompt}`,
           maxOutputTokens: 2500,
