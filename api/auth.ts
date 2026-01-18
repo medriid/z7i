@@ -4,12 +4,199 @@ import { hashPassword, verifyPassword, generateToken, verifyToken, encryptZ7iPas
 import { z7iLogin } from './lib/z7i-service.js';
 
 const HEX_COLOR_REGEX = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+const ADMIN_EMAIL = 'logeshms.cbe@gmail.com';
 
 function setCorsHeaders(res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+}
+
+function getAuth(req: VercelRequest) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  return verifyToken(authHeader.substring(7));
+}
+
+async function isAdmin(userId: string): Promise<boolean> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { email: true }
+  });
+  return user?.email === ADMIN_EMAIL;
+}
+
+const MCQ_TYPES = ['MCQ', 'SINGLE'];
+const NUMERICAL_TYPES = ['NAT', 'NUMERICAL', 'INTEGER'];
+
+function isNumericalType(questionType?: string | null) {
+  const normalized = (questionType || '').toUpperCase();
+  return NUMERICAL_TYPES.some(type => normalized.includes(type));
+}
+
+function isMcqType(questionType?: string | null) {
+  const normalized = (questionType || '').toUpperCase();
+  return MCQ_TYPES.some(type => normalized.includes(type));
+}
+
+type NumericRange = { min: number; max: number };
+
+function parseNumericRanges(value: string): NumericRange[] {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .flatMap(part => {
+      const rangeMatch = part.match(/^([+-]?\d*\.?\d+)\s*(?:-|–|—|\.\.)\s*([+-]?\d*\.?\d+)$/);
+      if (rangeMatch) {
+        const min = Number(rangeMatch[1]);
+        const max = Number(rangeMatch[2]);
+        if (!Number.isNaN(min) && !Number.isNaN(max)) {
+          return [{ min: Math.min(min, max), max: Math.max(min, max) }];
+        }
+        return [];
+      }
+      const numericValue = Number(part);
+      if (!Number.isNaN(numericValue)) {
+        return [{ min: numericValue, max: numericValue }];
+      }
+      return [];
+    });
+}
+
+function isAnswerMatch(studentAnswer: string, correctAnswer: string, questionType?: string | null) {
+  if (isNumericalType(questionType)) {
+    const studentValue = Number(studentAnswer);
+    if (Number.isNaN(studentValue)) return false;
+    const ranges = parseNumericRanges(correctAnswer);
+    if (ranges.length === 0) {
+      return studentAnswer.trim().toLowerCase() === correctAnswer.trim().toLowerCase();
+    }
+    return ranges.some(range => studentValue >= range.min && studentValue <= range.max);
+  }
+
+  if (isMcqType(questionType)) {
+    return studentAnswer.trim().toUpperCase() === correctAnswer.trim().toUpperCase();
+  }
+
+  return studentAnswer.trim().toLowerCase() === correctAnswer.trim().toLowerCase();
+}
+
+type GeminiResponse = {
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> };
+  }>;
+  error?: { message?: string };
+};
+
+type GeneratedQuestion = {
+  subject?: string;
+  chapter?: string;
+  difficulty?: string;
+  type: string;
+  question: string;
+  options?: string[];
+  answer: string;
+  marksPositive?: number;
+  marksNegative?: number;
+};
+
+function resolveGeminiModel(modelId: string) {
+  if (modelId === '3-12b') return 'gemini-3-12b';
+  if (modelId === 'lite') return 'gemini-2.5-flash-lite';
+  return 'gemini-2.5-flash';
+}
+
+function getGeminiApiKey() {
+  return process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_0;
+}
+
+function extractJsonBlock(text: string) {
+  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
+  if (fenced) return fenced[1].trim();
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    return text.slice(firstBrace, lastBrace + 1);
+  }
+  throw new Error('Unable to parse AI response.');
+}
+
+async function generateCustomQuestions({
+  prompt,
+  modelId,
+}: {
+  prompt: string;
+  modelId: string;
+}) {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
+    throw new Error('Gemini API key is missing. Set GEMINI_API_KEY.');
+  }
+
+  const modelName = resolveGeminiModel(modelId);
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+
+  const systemPrompt = `
+You are an expert test creator for JEE-style exams.
+Return ONLY valid JSON without markdown.
+Output format:
+{
+  "questions": [
+    {
+      "subject": "Physics",
+      "chapter": "Kinematics",
+      "difficulty": "easy|medium|hard",
+      "type": "MCQ" or "NAT",
+      "question": "Question text in HTML-safe plain text",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "answer": "A/B/C/D or numeric value as string",
+      "marksPositive": 4,
+      "marksNegative": 1
+    }
+  ]
+}
+Rules:
+- If type is NAT, omit options.
+- If type is MCQ, include exactly 4 options.
+- Ensure answer matches the type.
+- Keep HTML minimal (use <br/> for line breaks if needed).
+`;
+
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: `${systemPrompt}\n\nUser prompt:\n${prompt}` }] }],
+      generationConfig: {
+        temperature: 0.4,
+        topK: 40,
+        topP: 0.9,
+        maxOutputTokens: 6000,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => ({})) as GeminiResponse;
+    throw new Error(errorPayload.error?.message || 'Failed to generate questions.');
+  }
+
+  const data = await response.json() as GeminiResponse;
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) {
+    throw new Error('AI did not return any questions.');
+  }
+
+  const jsonText = extractJsonBlock(text);
+  const parsed = JSON.parse(jsonText) as { questions: GeneratedQuestion[] };
+  if (!parsed.questions || !Array.isArray(parsed.questions)) {
+    throw new Error('AI response did not include questions.');
+  }
+
+  return parsed.questions;
 }
 
 async function handleRegister(req: VercelRequest, res: VercelResponse) {
@@ -520,6 +707,377 @@ async function handleDeleteAccount(req: VercelRequest, res: VercelResponse) {
   }
 }
 
+async function handleCustomTestsCreate(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+
+  const userIsAdmin = await isAdmin(payload.userId);
+  if (!userIsAdmin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+
+  const { name, timeLimit, modelId, prompt } = req.body as {
+    name?: string;
+    timeLimit?: number;
+    modelId?: string;
+    prompt?: string;
+  };
+
+  if (!name || !timeLimit || !modelId || !prompt) {
+    return res.status(400).json({ error: 'Name, time limit, model, and prompt are required.' });
+  }
+
+  try {
+    const questions = await generateCustomQuestions({ prompt, modelId });
+    if (questions.length === 0) {
+      return res.status(400).json({ error: 'AI returned no questions.' });
+    }
+
+    const created = await prisma.customTest.create({
+      data: {
+        name,
+        prompt,
+        modelId,
+        timeLimit,
+        totalQuestions: questions.length,
+        status: 'ready',
+        createdByUserId: payload.userId,
+        questions: {
+          create: questions.map((question, index) => ({
+            questionOrder: index + 1,
+            subject: question.subject || null,
+            chapter: question.chapter || null,
+            difficulty: question.difficulty || null,
+            questionType: question.type || 'MCQ',
+            questionHtml: question.question,
+            option1: question.options?.[0] || null,
+            option2: question.options?.[1] || null,
+            option3: question.options?.[2] || null,
+            option4: question.options?.[3] || null,
+            correctAnswer: question.answer,
+            marksPositive: question.marksPositive ?? 4,
+            marksNegative: question.marksNegative ?? 1,
+          })),
+        },
+      },
+      select: { id: true, name: true, totalQuestions: true },
+    });
+
+    return res.status(200).json({ success: true, test: created });
+  } catch (error) {
+    console.error('Custom test create error:', error);
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to create test.' });
+  }
+}
+
+async function handleCustomTestsList(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+
+  const tests = await prisma.customTest.findMany({
+    orderBy: { createdAt: 'desc' },
+    include: {
+      attempts: {
+        where: { userId: payload.userId },
+        select: {
+          id: true,
+          status: true,
+          correct: true,
+          incorrect: true,
+          unattempted: true,
+          totalScore: true,
+          maxScore: true,
+          timeTaken: true,
+          accuracy: true,
+          updatedAt: true,
+        }
+      }
+    }
+  });
+
+  const formatted = tests.map(test => {
+    const attempt = test.attempts[0];
+    return {
+      id: test.id,
+      name: test.name,
+      timeLimit: test.timeLimit,
+      totalQuestions: test.totalQuestions,
+      status: test.status,
+      createdAt: test.createdAt,
+      attempt: attempt
+        ? {
+            id: attempt.id,
+            status: attempt.status,
+            correct: attempt.correct,
+            incorrect: attempt.incorrect,
+            unattempted: attempt.unattempted,
+            totalScore: attempt.totalScore,
+            maxScore: attempt.maxScore,
+            timeTaken: attempt.timeTaken,
+            accuracy: attempt.accuracy,
+            updatedAt: attempt.updatedAt,
+          }
+        : null
+    };
+  });
+
+  return res.status(200).json({ success: true, tests: formatted });
+}
+
+async function handleCustomTestsStart(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+
+  const { testId } = req.body as { testId?: string };
+  if (!testId) {
+    return res.status(400).json({ error: 'Test ID is required.' });
+  }
+
+  const test = await prisma.customTest.findUnique({
+    where: { id: testId },
+    include: {
+      questions: { orderBy: { questionOrder: 'asc' } },
+      attempts: {
+        where: { userId: payload.userId },
+        include: { responses: true }
+      }
+    }
+  });
+
+  if (!test) {
+    return res.status(404).json({ error: 'Test not found.' });
+  }
+
+  if (test.status !== 'ready') {
+    return res.status(400).json({ error: 'Test is still being prepared.' });
+  }
+
+  let attempt = test.attempts[0];
+  if (!attempt) {
+    attempt = await prisma.customTestAttempt.create({
+      data: {
+        testId,
+        userId: payload.userId,
+      },
+      include: { responses: true }
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    test: {
+      id: test.id,
+      name: test.name,
+      timeLimit: test.timeLimit,
+      totalQuestions: test.totalQuestions,
+    },
+    attempt,
+    questions: test.questions,
+  });
+}
+
+async function handleCustomTestsSaveProgress(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+
+  const { attemptId, elapsedTime, currentQuestionIndex, responses } = req.body as {
+    attemptId?: string;
+    elapsedTime?: number;
+    currentQuestionIndex?: number;
+    responses?: Array<{
+      questionId: string;
+      answer: string | null;
+      flagged: boolean;
+      timeSpent: number;
+      visited: boolean;
+    }>;
+  };
+
+  if (!attemptId || !Array.isArray(responses)) {
+    return res.status(400).json({ error: 'Attempt ID and responses are required.' });
+  }
+
+  const attempt = await prisma.customTestAttempt.findUnique({
+    where: { id: attemptId },
+    select: { id: true, userId: true, status: true },
+  });
+  if (!attempt || attempt.userId !== payload.userId) {
+    return res.status(404).json({ error: 'Attempt not found.' });
+  }
+
+  if (attempt.status !== 'in_progress') {
+    return res.status(400).json({ error: 'Attempt is already submitted.' });
+  }
+
+  await prisma.$transaction([
+    prisma.customTestAttempt.update({
+      where: { id: attemptId },
+      data: {
+        timeTaken: typeof elapsedTime === 'number' ? elapsedTime : undefined,
+        currentQuestionIndex: typeof currentQuestionIndex === 'number' ? currentQuestionIndex : undefined,
+      }
+    }),
+    ...responses.map(response =>
+      prisma.customTestResponse.upsert({
+        where: { attemptId_questionId: { attemptId, questionId: response.questionId } },
+        update: {
+          answer: response.answer,
+          flagged: response.flagged,
+          timeSpent: response.timeSpent,
+          visited: response.visited,
+        },
+        create: {
+          attemptId,
+          questionId: response.questionId,
+          answer: response.answer,
+          flagged: response.flagged,
+          timeSpent: response.timeSpent,
+          visited: response.visited,
+        }
+      })
+    )
+  ]);
+
+  return res.status(200).json({ success: true });
+}
+
+async function handleCustomTestsSubmit(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+
+  const { attemptId, elapsedTime } = req.body as { attemptId?: string; elapsedTime?: number };
+  if (!attemptId) {
+    return res.status(400).json({ error: 'Attempt ID is required.' });
+  }
+
+  const attempt = await prisma.customTestAttempt.findUnique({
+    where: { id: attemptId },
+    include: {
+      test: { include: { questions: true } },
+      responses: true,
+    }
+  });
+
+  if (!attempt || attempt.userId !== payload.userId) {
+    return res.status(404).json({ error: 'Attempt not found.' });
+  }
+
+  if (attempt.status === 'submitted') {
+    return res.status(400).json({ error: 'Attempt already submitted.' });
+  }
+
+  const responsesByQuestion = new Map(attempt.responses.map(response => [response.questionId, response]));
+  let correct = 0;
+  let incorrect = 0;
+  let score = 0;
+  const maxScore = attempt.test.questions.reduce((acc, question) => acc + question.marksPositive, 0);
+
+  const responseUpdates = attempt.test.questions.map(question => {
+    const response = responsesByQuestion.get(question.id);
+    const answer = response?.answer?.trim() ?? '';
+    let answerStatus = 'unattempted';
+    let marksObtained = 0;
+
+    if (answer) {
+      const isCorrect = isAnswerMatch(answer, question.correctAnswer, question.questionType);
+      if (isCorrect) {
+        correct += 1;
+        score += question.marksPositive;
+        answerStatus = 'correct';
+        marksObtained = question.marksPositive;
+      } else {
+        incorrect += 1;
+        score -= question.marksNegative;
+        answerStatus = 'incorrect';
+        marksObtained = -question.marksNegative;
+      }
+    }
+
+    return prisma.customTestResponse.upsert({
+      where: { attemptId_questionId: { attemptId, questionId: question.id } },
+      update: { answerStatus, marksObtained },
+      create: {
+        attemptId,
+        questionId: question.id,
+        answer: answer || null,
+        answerStatus,
+        marksObtained,
+      }
+    });
+  });
+
+  const unattempted = attempt.test.questions.length - correct - incorrect;
+  const accuracy = attempt.test.questions.length
+    ? Math.round((correct / attempt.test.questions.length) * 100)
+    : 0;
+
+  await prisma.$transaction([
+    ...responseUpdates,
+    prisma.customTestAttempt.update({
+      where: { id: attemptId },
+      data: {
+        status: 'submitted',
+        submittedAt: new Date(),
+        timeTaken: typeof elapsedTime === 'number' ? elapsedTime : attempt.timeTaken,
+        correct,
+        incorrect,
+        unattempted,
+        totalScore: score,
+        maxScore,
+        accuracy,
+      }
+    })
+  ]);
+
+  return res.status(200).json({
+    success: true,
+    results: {
+      correct,
+      incorrect,
+      unattempted,
+      score,
+      maxScore,
+      accuracy,
+      timeTaken: typeof elapsedTime === 'number' ? elapsedTime : attempt.timeTaken ?? 0,
+    }
+  });
+}
+
+async function handleCustomTestsAttempt(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+
+  const attemptId = req.query.attemptId as string;
+  if (!attemptId) {
+    return res.status(400).json({ error: 'Attempt ID is required.' });
+  }
+
+  const attempt = await prisma.customTestAttempt.findUnique({
+    where: { id: attemptId },
+    include: {
+      test: { include: { questions: { orderBy: { questionOrder: 'asc' } } } },
+      responses: true,
+    }
+  });
+
+  if (!attempt || attempt.userId !== payload.userId) {
+    return res.status(404).json({ error: 'Attempt not found.' });
+  }
+
+  return res.status(200).json({
+    success: true,
+    attempt,
+    test: {
+      id: attempt.test.id,
+      name: attempt.test.name,
+      timeLimit: attempt.test.timeLimit,
+      totalQuestions: attempt.test.totalQuestions,
+    },
+    questions: attempt.test.questions,
+    responses: attempt.responses,
+  });
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCorsHeaders(res);
 
@@ -554,6 +1112,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     case 'delete-account':
       if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
       return handleDeleteAccount(req, res);
+    case 'custom-tests-create':
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      return handleCustomTestsCreate(req, res);
+    case 'custom-tests-list':
+      if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+      return handleCustomTestsList(req, res);
+    case 'custom-tests-start':
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      return handleCustomTestsStart(req, res);
+    case 'custom-tests-save-progress':
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      return handleCustomTestsSaveProgress(req, res);
+    case 'custom-tests-submit':
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      return handleCustomTestsSubmit(req, res);
+    case 'custom-tests-attempt':
+      if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+      return handleCustomTestsAttempt(req, res);
     default:
       return res.status(400).json({ error: 'Invalid action' });
   }

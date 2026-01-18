@@ -17,6 +17,8 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { renderLatexInHtml } from './utils/latex';
 import { ExamWriter } from './ExamWriter';
+import { CustomExamWriter } from './CustomExamWriter';
+import { CustomTestResults } from './CustomTestResults';
 import PastYearPapers from './PastYearPapers';
 import { NotFound } from './NotFound';
 import { OwnerDashboard } from './OwnerDashboard';
@@ -97,6 +99,27 @@ interface Test {
   keyChangeCount: number;
   bonusMarks: number;
   adjustedScore: number;
+}
+
+interface CustomTest {
+  id: string;
+  name: string;
+  timeLimit: number;
+  totalQuestions: number;
+  status: string;
+  createdAt: string;
+  attempt: null | {
+    id: string;
+    status: string;
+    correct: number;
+    incorrect: number;
+    unattempted: number;
+    totalScore: number;
+    maxScore: number | null;
+    timeTaken: number | null;
+    accuracy: number | null;
+    updatedAt: string;
+  };
 }
 
 interface Comment {
@@ -1884,6 +1907,49 @@ function TestsList({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function CustomTestCard({
+  test,
+  onStart,
+  onResume,
+  onViewResults
+}: {
+  test: CustomTest;
+  onStart: () => void;
+  onResume: () => void;
+  onViewResults: () => void;
+}) {
+  const attempt = test.attempt;
+  const isSubmitted = attempt?.status === 'submitted';
+  const actionLabel = attempt ? (isSubmitted ? 'View Results' : 'Resume') : 'Start';
+  const actionHandler = attempt ? (isSubmitted ? onViewResults : onResume) : onStart;
+  const isReady = test.status === 'ready';
+  const statusLabel = !isReady ? 'Preparing' : isSubmitted ? 'Completed' : attempt ? 'In Progress' : 'Not Started';
+
+  return (
+    <div className="custom-test-card">
+      <div>
+        <h3>{test.name}</h3>
+        <div className="custom-test-meta">
+          <span>{test.totalQuestions} questions</span>
+          <span>{test.timeLimit} min</span>
+          <span className="custom-test-status">{statusLabel}</span>
+        </div>
+      </div>
+      {attempt && isSubmitted && (
+        <div className="custom-test-meta">
+          <span>Score: {attempt.totalScore} / {attempt.maxScore ?? 0}</span>
+          {attempt.accuracy !== null && <span>Accuracy: {attempt.accuracy}%</span>}
+        </div>
+      )}
+      <div className="custom-test-actions">
+        <button className="btn btn-secondary" onClick={actionHandler} disabled={!isReady}>
+          {actionLabel}
+        </button>
+      </div>
     </div>
   );
 }
@@ -7016,8 +7082,24 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
   const [noQuestionResyncing, setNoQuestionResyncing] = useState(false);
   const [noQuestionResyncMessage, setNoQuestionResyncMessage] = useState('');
   const [noQuestionResyncStatus, setNoQuestionResyncStatus] = useState<'success' | 'error' | ''>('');
+  const [customTests, setCustomTests] = useState<CustomTest[]>([]);
+  const [loadingCustomTests, setLoadingCustomTests] = useState(false);
+  const [showCustomTestPanel, setShowCustomTestPanel] = useState(false);
+  const [creatingCustomTest, setCreatingCustomTest] = useState(false);
+  const [customTestMessage, setCustomTestMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [customTestName, setCustomTestName] = useState('');
+  const [customTestTimeLimit, setCustomTestTimeLimit] = useState(180);
+  const [customTestModel, setCustomTestModel] = useState('flash');
+  const [customTestPrompt, setCustomTestPrompt] = useState('');
+  const [customExamTestId, setCustomExamTestId] = useState<string | null>(null);
+  const [customResultsAttemptId, setCustomResultsAttemptId] = useState<string | null>(null);
   
   const isOwnerUser = user.email === ADMIN_EMAIL;
+  const customTestModels = [
+    { id: 'flash', label: 'Gemini 2.5 Flash' },
+    { id: 'lite', label: 'Gemini 2.5 Flash Lite' },
+    { id: '3-12b', label: 'Gemini 3 12B' },
+  ];
   const sortedTests = useMemo(() => {
     return [...tests].sort((a, b) => new Date(b.submitDate).getTime() - new Date(a.submitDate).getTime());
   }, [tests]);
@@ -7074,9 +7156,27 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     }
   }, [user.z7iLinked]);
 
+  const loadCustomTests = useCallback(async () => {
+    setLoadingCustomTests(true);
+    try {
+      const data = await apiRequest('/auth?action=custom-tests-list');
+      if (data.success) {
+        setCustomTests(data.tests);
+      }
+    } catch {
+      console.error('Failed to load custom tests');
+    } finally {
+      setLoadingCustomTests(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadTests();
   }, [loadTests]);
+
+  useEffect(() => {
+    loadCustomTests();
+  }, [loadCustomTests]);
 
   useEffect(() => {
     if (!testsWithoutQuestions.length) {
@@ -7142,6 +7242,43 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     }
   };
 
+  const showCustomMessage = (type: 'success' | 'error', text: string) => {
+    setCustomTestMessage({ type, text });
+    setTimeout(() => setCustomTestMessage(null), 4000);
+  };
+
+  const handleCreateCustomTest = async () => {
+    if (!customTestName.trim() || !customTestPrompt.trim()) {
+      showCustomMessage('error', 'Test name and prompt are required.');
+      return;
+    }
+    setCreatingCustomTest(true);
+    try {
+      const data = await apiRequest('/auth?action=custom-tests-create', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: customTestName.trim(),
+          timeLimit: customTestTimeLimit,
+          modelId: customTestModel,
+          prompt: customTestPrompt.trim(),
+        }),
+      });
+      if (data.success) {
+        showCustomMessage('success', 'Custom test created. Ready for students!');
+        setCustomTestName('');
+        setCustomTestPrompt('');
+        setShowCustomTestPanel(false);
+        await loadCustomTests();
+      } else {
+        showCustomMessage('error', data.error || 'Failed to create custom test.');
+      }
+    } catch {
+      showCustomMessage('error', 'Failed to create custom test.');
+    } finally {
+      setCreatingCustomTest(false);
+    }
+  };
+
   const handleNoQuestionResync = async () => {
     const selectedTest = testsWithoutQuestions.find(test => test.id === selectedNoQuestionId);
     if (!selectedTest) {
@@ -7195,6 +7332,8 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
   const goHome = () => {
     setSelectedTest(null);
     setExamWriterTest(null);
+    setCustomExamTestId(null);
+    setCustomResultsAttemptId(null);
     setTimeIntelReview(null);
     setShowBookmarks(false);
     setShowForum(false);
@@ -7221,6 +7360,47 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
           <ProfileModal 
             user={user} 
             onClose={() => setShowProfile(false)} 
+            onUserUpdate={onUserUpdate}
+            onLogout={handleLogout}
+          />
+        )}
+      </>
+    );
+  }
+
+  if (customExamTestId) {
+    return (
+      <>
+        <Navigation user={user} onSync={handleSync} syncing={syncing} onProfileClick={() => setShowProfile(true)} onHomeClick={goHome} />
+        <CustomExamWriter
+          testId={customExamTestId}
+          onBack={() => setCustomExamTestId(null)}
+          onSubmitted={() => loadCustomTests()}
+        />
+        {showProfile && (
+          <ProfileModal
+            user={user}
+            onClose={() => setShowProfile(false)}
+            onUserUpdate={onUserUpdate}
+            onLogout={handleLogout}
+          />
+        )}
+      </>
+    );
+  }
+
+  if (customResultsAttemptId) {
+    return (
+      <>
+        <Navigation user={user} onSync={handleSync} syncing={syncing} onProfileClick={() => setShowProfile(true)} onHomeClick={goHome} />
+        <CustomTestResults
+          attemptId={customResultsAttemptId}
+          onBack={() => setCustomResultsAttemptId(null)}
+        />
+        {showProfile && (
+          <ProfileModal
+            user={user}
+            onClose={() => setShowProfile(false)}
             onUserUpdate={onUserUpdate}
             onLogout={handleLogout}
           />
@@ -7381,6 +7561,106 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     );
   }
 
+  const customTestsSection = (
+    <section className="custom-tests-section">
+      <div className="custom-tests-header">
+        <div>
+          <h2>Custom Tests</h2>
+          <p className="custom-tests-description">Owner-generated papers available to everyone.</p>
+        </div>
+      </div>
+
+      {customTestMessage && (
+        <div className={`alert ${customTestMessage.type === 'error' ? 'alert-error' : 'alert-success'}`}>
+          {customTestMessage.text}
+        </div>
+      )}
+
+      {showCustomTestPanel && isOwnerUser && (
+        <div className="custom-test-panel">
+          <div className="form-row">
+            <div className="form-group">
+              <label className="form-label">Test name</label>
+              <input
+                className="form-input"
+                value={customTestName}
+                onChange={(event) => setCustomTestName(event.target.value)}
+                placeholder="e.g. JEE Mixed Drill #1"
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Time limit (minutes)</label>
+              <input
+                className="form-input"
+                type="number"
+                min={10}
+                max={300}
+                value={customTestTimeLimit}
+                onChange={(event) => setCustomTestTimeLimit(Number(event.target.value))}
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Model</label>
+              <select
+                className="form-input"
+                value={customTestModel}
+                onChange={(event) => setCustomTestModel(event.target.value)}
+              >
+                {customTestModels.map(model => (
+                  <option key={model.id} value={model.id}>
+                    {model.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Prompt</label>
+            <textarea
+              className="form-input"
+              rows={4}
+              value={customTestPrompt}
+              onChange={(event) => setCustomTestPrompt(event.target.value)}
+              placeholder="Tell the AI how many questions, subjects, chapters, difficulty levels, and question types."
+            />
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <button className="btn btn-secondary" onClick={() => setShowCustomTestPanel(false)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={handleCreateCustomTest} disabled={creatingCustomTest}>
+              {creatingCustomTest ? 'Creating...' : 'Create Test'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loadingCustomTests ? (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
+          <span className="spinner" />
+        </div>
+      ) : customTests.length === 0 ? (
+        <div className="empty-state">
+          <FileText size={36} />
+          <div className="empty-state-title">No Custom Tests Yet</div>
+          <div className="empty-state-text">Custom tests created by the owner will appear here.</div>
+        </div>
+      ) : (
+        <div className="custom-tests-grid">
+          {customTests.map(test => (
+            <CustomTestCard
+              key={test.id}
+              test={test}
+              onStart={() => setCustomExamTestId(test.id)}
+              onResume={() => setCustomExamTestId(test.id)}
+              onViewResults={() => test.attempt && setCustomResultsAttemptId(test.attempt.id)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+
   return (
     <>
       <Navigation user={user} onSync={handleSync} syncing={syncing} onProfileClick={() => setShowProfile(true)} onHomeClick={goHome} />
@@ -7401,6 +7681,12 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
                 <button className="btn btn-secondary" onClick={() => setShowOwnerDashboard(true)} style={{ background: 'var(--warning)', color: 'black' }}>
                   <Shield size={16} />
                   Owner
+                </button>
+              )}
+              {isOwnerUser && (
+                <button className="btn btn-secondary" onClick={() => setShowCustomTestPanel(prev => !prev)}>
+                  <Sparkles size={16} />
+                  Custom Test
                 </button>
               )}
               <button className="btn btn-secondary" onClick={() => setShowForum(true)}>
@@ -7443,15 +7729,18 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
           )}
 
           {!user.z7iLinked ? (
-            <div className="empty-state">
-              <Link2 size={48} />
-              <div className="empty-state-title">Link Your Z7I Account</div>
-              <div className="empty-state-text">Connect your Z7I account to sync and view your test results.</div>
-              <button className="btn btn-primary" onClick={() => setShowLinkModal(true)}>
-                <Link2 size={16} />
-                Link Z7I Account
-              </button>
-            </div>
+            <>
+              <div className="empty-state">
+                <Link2 size={48} />
+                <div className="empty-state-title">Link Your Z7I Account</div>
+                <div className="empty-state-text">Connect your Z7I account to sync and view your test results.</div>
+                <button className="btn btn-primary" onClick={() => setShowLinkModal(true)}>
+                  <Link2 size={16} />
+                  Link Z7I Account
+                </button>
+              </div>
+              {customTestsSection}
+            </>
           ) : loading ? (
             <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}>
               <span className="spinner" />
@@ -7459,6 +7748,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
           ) : (
             <>
               <TestsList tests={testsWithQuestions} onSelectTest={setSelectedTest} onWriteExam={setExamWriterTest} />
+              {customTestsSection}
               <section className="prep-overview">
                 <div className="prep-header">
                   <div>

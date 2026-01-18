@@ -530,6 +530,82 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       )
     `;
 
+    await sql`
+      CREATE TABLE IF NOT EXISTS "CustomTest" (
+        "id" TEXT PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "prompt" TEXT NOT NULL,
+        "modelId" TEXT NOT NULL,
+        "timeLimit" INTEGER NOT NULL,
+        "totalQuestions" INTEGER NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'ready',
+        "createdByUserId" TEXT REFERENCES "User"("id") ON DELETE SET NULL,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS "CustomTestQuestion" (
+        "id" TEXT PRIMARY KEY,
+        "testId" TEXT NOT NULL REFERENCES "CustomTest"("id") ON DELETE CASCADE,
+        "questionOrder" INTEGER NOT NULL,
+        "subject" TEXT,
+        "chapter" TEXT,
+        "difficulty" TEXT,
+        "questionType" TEXT NOT NULL,
+        "questionHtml" TEXT NOT NULL,
+        "option1" TEXT,
+        "option2" TEXT,
+        "option3" TEXT,
+        "option4" TEXT,
+        "correctAnswer" TEXT NOT NULL,
+        "marksPositive" DOUBLE PRECISION NOT NULL DEFAULT 4,
+        "marksNegative" DOUBLE PRECISION NOT NULL DEFAULT 1,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE("testId", "questionOrder")
+      )
+    `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS "CustomTestAttempt" (
+        "id" TEXT PRIMARY KEY,
+        "testId" TEXT NOT NULL REFERENCES "CustomTest"("id") ON DELETE CASCADE,
+        "userId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+        "status" TEXT NOT NULL DEFAULT 'in_progress',
+        "startedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "submittedAt" TIMESTAMP(3),
+        "timeTaken" INTEGER,
+        "currentQuestionIndex" INTEGER NOT NULL DEFAULT 0,
+        "correct" INTEGER NOT NULL DEFAULT 0,
+        "incorrect" INTEGER NOT NULL DEFAULT 0,
+        "unattempted" INTEGER NOT NULL DEFAULT 0,
+        "totalScore" DOUBLE PRECISION NOT NULL DEFAULT 0,
+        "maxScore" INTEGER,
+        "accuracy" INTEGER,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE("testId", "userId")
+      )
+    `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS "CustomTestResponse" (
+        "id" TEXT PRIMARY KEY,
+        "attemptId" TEXT NOT NULL REFERENCES "CustomTestAttempt"("id") ON DELETE CASCADE,
+        "questionId" TEXT NOT NULL REFERENCES "CustomTestQuestion"("id") ON DELETE CASCADE,
+        "answer" TEXT,
+        "flagged" BOOLEAN NOT NULL DEFAULT FALSE,
+        "timeSpent" INTEGER NOT NULL DEFAULT 0,
+        "visited" BOOLEAN NOT NULL DEFAULT FALSE,
+        "answerStatus" TEXT,
+        "marksObtained" DOUBLE PRECISION,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE("attemptId", "questionId")
+      )
+    `;
+
     await sql`CREATE INDEX IF NOT EXISTS "ForumPost_userId_idx" ON "ForumPost"("userId")`;
     await sql`CREATE INDEX IF NOT EXISTS "ForumPost_questionId_idx" ON "ForumPost"("questionId")`;
     await sql`CREATE INDEX IF NOT EXISTS "ForumPost_createdAt_idx" ON "ForumPost"("createdAt" DESC)`;
@@ -549,7 +625,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({ 
       success: true, 
       message: 'Database migrated successfully!',
-      tables: ['User', 'Session', 'AiChatPersonalityConfig', 'AiChatSession', 'AiChatMessage', 'Z7iAccount', 'Package', 'Test', 'TestAttempt', 'QuestionResponse', 'QuestionBookmark', 'QuestionNote', 'QuestionComment', 'BonusQuestion', 'AnswerKeyChange', 'TestRevision', 'RevisionResponse', 'ScoreAdjustment', 'ForumPost', 'ForumReply', 'ForumPostLike', 'ForumReplyLike', 'PastYearPaper', 'PYPQuestion', 'PYPAttempt', 'PYPBookmark', 'PYPNote']
+      tables: ['User', 'Session', 'AiChatPersonalityConfig', 'AiChatSession', 'AiChatMessage', 'Z7iAccount', 'Package', 'Test', 'TestAttempt', 'QuestionResponse', 'QuestionBookmark', 'QuestionNote', 'QuestionComment', 'BonusQuestion', 'AnswerKeyChange', 'TestRevision', 'RevisionResponse', 'ScoreAdjustment', 'ForumPost', 'ForumReply', 'ForumPostLike', 'ForumReplyLike', 'PastYearPaper', 'PYPQuestion', 'PYPAttempt', 'PYPBookmark', 'PYPNote', 'CustomTest', 'CustomTestQuestion', 'CustomTestAttempt', 'CustomTestResponse']
     });
 
   } catch (error) {
