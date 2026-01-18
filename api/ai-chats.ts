@@ -325,7 +325,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === 'POST' && action === 'generate') {
-      const { messages, modelId, personalityId, systemPrompt } = req.body ?? {};
+      const { messages, modelId, personalityId, systemPrompt, attachments } = req.body ?? {};
       if (!Array.isArray(messages) || messages.length === 0) {
         return res.status(400).json({ error: 'Messages are required' });
       }
@@ -392,6 +392,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         messages,
         systemPrompt: resolvedSystemPrompt,
         modelId,
+        attachments: Array.isArray(attachments) ? attachments : undefined,
       });
 
       return res.status(200).json({ success: true, message: reply.text, modelUsed: reply.modelUsed });
