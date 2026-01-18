@@ -121,6 +121,104 @@ interface CustomTest {
   };
 }
 
+type CustomTestConfig = 'jee-main' | 'jee-advanced' | 'assignment';
+type AssignmentSubject = 'Physics' | 'Chemistry' | 'Mathematics';
+type DifficultyChoice = 'mixed' | 'easy' | 'medium' | 'hard';
+
+const SUBJECT_CHAPTERS: Record<AssignmentSubject, string[]> = {
+  Physics: [
+    'Units and Measurements',
+    'Kinematics',
+    'Laws of Motion',
+    'Work, Energy and Power',
+    'Rotational Motion',
+    'Gravitation',
+    'Properties of Solids and Liquids',
+    'Thermodynamics',
+    'Kinetic Theory of Gases',
+    'Oscillations',
+    'Waves',
+    'Electrostatics',
+    'Current Electricity',
+    'Magnetic Effects of Current',
+    'Magnetism and Matter',
+    'Electromagnetic Induction',
+    'Alternating Current',
+    'Electromagnetic Waves',
+    'Ray Optics and Optical Instruments',
+    'Wave Optics',
+    'Dual Nature of Matter and Radiation',
+    'Atoms',
+    'Nuclei',
+    'Semiconductor Electronics',
+    'Communication Systems',
+    'Experimental Physics',
+  ],
+  Chemistry: [
+    'Some Basic Concepts of Chemistry',
+    'Structure of Atom',
+    'Classification of Elements and Periodicity',
+    'Chemical Bonding and Molecular Structure',
+    'States of Matter (Gases and Liquids)',
+    'Thermodynamics',
+    'Chemical Equilibrium',
+    'Ionic Equilibrium',
+    'Redox Reactions',
+    'Hydrogen',
+    's-Block Elements',
+    'p-Block Elements (Group 13-14)',
+    'p-Block Elements (Group 15-18)',
+    'd- and f-Block Elements',
+    'Coordination Compounds',
+    'General Organic Chemistry',
+    'Hydrocarbons',
+    'Haloalkanes and Haloarenes',
+    'Alcohols, Phenols and Ethers',
+    'Aldehydes, Ketones and Carboxylic Acids',
+    'Amines',
+    'Biomolecules',
+    'Polymers',
+    'Chemistry in Everyday Life',
+    'Solutions',
+    'Electrochemistry',
+    'Chemical Kinetics',
+    'Surface Chemistry',
+    'Solid State',
+    'Metallurgy',
+    'Environmental Chemistry',
+    'Purification and Characterisation of Organic Compounds',
+  ],
+  Mathematics: [
+    'Sets and Relations',
+    'Functions',
+    'Trigonometric Functions',
+    'Inverse Trigonometric Functions',
+    'Complex Numbers and Quadratic Equations',
+    'Matrices',
+    'Determinants',
+    'Permutations and Combinations',
+    'Binomial Theorem',
+    'Sequence and Series',
+    'Limits and Derivatives',
+    'Continuity and Differentiability',
+    'Application of Derivatives',
+    'Integral Calculus',
+    'Area Under Curves',
+    'Differential Equations',
+    'Vector Algebra',
+    'Three Dimensional Geometry',
+    'Straight Lines',
+    'Circle',
+    'Parabola',
+    'Ellipse',
+    'Hyperbola',
+    'Probability',
+    'Statistics',
+    'Mathematical Reasoning',
+    'Linear Programming',
+  ],
+};
+
 interface Comment {
   id: string;
   userId: string;
@@ -7088,21 +7186,48 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
   const [customTestMessage, setCustomTestMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [customTestName, setCustomTestName] = useState('');
   const [customTestTimeLimit, setCustomTestTimeLimit] = useState(180);
-  const [customTestModel, setCustomTestModel] = useState('auto');
-  const [customTestPrompt, setCustomTestPrompt] = useState('');
+  const [customTestModel, setCustomTestModel] = useState<'auto' | '2.5-flash' | '3-flash'>('2.5-flash');
+  const [customTestConfig, setCustomTestConfig] = useState<CustomTestConfig>('jee-main');
+  const [jeeMainDifficulty, setJeeMainDifficulty] = useState<'mixed' | 'easy' | 'hard'>('mixed');
+  const [assignmentSubject, setAssignmentSubject] = useState<AssignmentSubject>('Physics');
+  const [assignmentChapterMode, setAssignmentChapterMode] = useState<'all' | 'single' | 'multiple'>('all');
+  const [assignmentSelectedChapters, setAssignmentSelectedChapters] = useState<string[]>([]);
+  const [assignmentChapterSearch, setAssignmentChapterSearch] = useState('');
+  const [assignmentTotalQuestions, setAssignmentTotalQuestions] = useState(20);
+  const [assignmentMcqCount, setAssignmentMcqCount] = useState(10);
+  const [assignmentNatCount, setAssignmentNatCount] = useState(10);
+  const [assignmentDifficulty, setAssignmentDifficulty] = useState<DifficultyChoice>('mixed');
   const [customTestLogs, setCustomTestLogs] = useState<Array<{ timestamp: string; message: string; level: 'info' | 'success' | 'error' }>>([]);
   const [customExamTestId, setCustomExamTestId] = useState<string | null>(null);
   const [customResultsAttemptId, setCustomResultsAttemptId] = useState<string | null>(null);
   
   const isOwnerUser = Boolean(user.isOwner);
-  const customTestModels = [
-    { id: 'auto', label: 'Auto (2.5 Flash + 3 Flash)' },
-  ];
   const sortedTests = useMemo(() => {
     return [...tests].sort((a, b) => new Date(b.submitDate).getTime() - new Date(a.submitDate).getTime());
   }, [tests]);
   const testsWithQuestions = useMemo(() => tests.filter(test => test.totalQuestions > 0), [tests]);
   const testsWithoutQuestions = useMemo(() => tests.filter(test => test.totalQuestions === 0), [tests]);
+  const assignmentChapterList = useMemo(() => SUBJECT_CHAPTERS[assignmentSubject], [assignmentSubject]);
+  const filteredAssignmentChapters = useMemo(() => {
+    const query = assignmentChapterSearch.trim().toLowerCase();
+    if (query.length < 3) return assignmentChapterList;
+    return assignmentChapterList.filter(chapter => chapter.toLowerCase().includes(query));
+  }, [assignmentChapterList, assignmentChapterSearch]);
+  const assignmentQuestionMismatch = useMemo(
+    () => assignmentMcqCount + assignmentNatCount !== assignmentTotalQuestions,
+    [assignmentMcqCount, assignmentNatCount, assignmentTotalQuestions]
+  );
+
+  useEffect(() => {
+    setAssignmentSelectedChapters([]);
+    setAssignmentChapterSearch('');
+  }, [assignmentSubject]);
+
+  useEffect(() => {
+    if (assignmentChapterMode === 'all') {
+      setAssignmentSelectedChapters([]);
+    }
+  }, [assignmentChapterMode]);
   const prepStats = useMemo(() => {
     const totalTests = tests.length;
     const totalQuestions = tests.reduce((acc, test) => acc + test.totalQuestions, 0);
@@ -7245,11 +7370,67 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     setTimeout(() => setCustomTestMessage(null), 4000);
   };
 
+  const applyCustomTestConfig = (config: CustomTestConfig) => {
+    setCustomTestConfig(config);
+    if (config === 'jee-main') {
+      setCustomTestTimeLimit(180);
+      setCustomTestModel('2.5-flash');
+      setJeeMainDifficulty('mixed');
+    } else if (config === 'jee-advanced') {
+      setCustomTestTimeLimit(180);
+      setCustomTestModel('3-flash');
+    } else {
+      setCustomTestTimeLimit(60);
+      setCustomTestModel('2.5-flash');
+      setAssignmentChapterMode('all');
+      setAssignmentSelectedChapters([]);
+      setAssignmentChapterSearch('');
+    }
+  };
+
+  const buildCustomTestPrompt = () => {
+    if (customTestConfig === 'jee-main') {
+      const difficultyLabel = jeeMainDifficulty === 'mixed' ? 'a balanced mix of easy, medium, and hard' : jeeMainDifficulty;
+      return `Create a JEE Main style test with 75 questions (25 each in Physics, Chemistry, Mathematics). For each subject include 20 MCQ and 5 NAT. Difficulty should be ${difficultyLabel}. Use JEE Main marking (+4/-1 for MCQ, +4/0 for NAT).`;
+    }
+
+    if (customTestConfig === 'jee-advanced') {
+      return 'Create a JEE Advanced style test worth 180 marks with an even spread across Physics, Chemistry, and Mathematics. Use extremely hard difficulty throughout. Include a mix of MCQ and NAT, and set marks so the total is 180 (use appropriate negative marking for MCQ and no negative for NAT).';
+    }
+
+    const totalQuestions = assignmentTotalQuestions;
+    const subject = assignmentSubject;
+    const difficultyLabel = assignmentDifficulty === 'mixed' ? 'a balanced mix of easy, medium, and hard' : assignmentDifficulty;
+    const chapterSelection =
+      assignmentChapterMode === 'all'
+        ? 'all chapters'
+        : assignmentSelectedChapters.join(', ');
+
+    return `Create an assignment with ${totalQuestions} questions in ${subject}. Chapters: ${chapterSelection}. Include ${assignmentMcqCount} MCQ and ${assignmentNatCount} NAT. Difficulty should be ${difficultyLabel}. Use standard JEE marking (+4/-1 for MCQ, +4/0 for NAT).`;
+  };
+
   const handleCreateCustomTest = async () => {
-    if (!customTestName.trim() || !customTestPrompt.trim()) {
-      showCustomMessage('error', 'Test name and prompt are required.');
+    if (!customTestName.trim()) {
+      showCustomMessage('error', 'Test name is required.');
       return;
     }
+
+    if (customTestConfig === 'assignment') {
+      if (assignmentTotalQuestions <= 0) {
+        showCustomMessage('error', 'Assignment must have at least 1 question.');
+        return;
+      }
+      if (assignmentChapterMode !== 'all' && assignmentSelectedChapters.length === 0) {
+        showCustomMessage('error', 'Select at least one chapter for the assignment.');
+        return;
+      }
+      if (assignmentQuestionMismatch) {
+        showCustomMessage('error', 'MCQ + NAT counts must match the total questions.');
+        return;
+      }
+    }
+
+    const prompt = buildCustomTestPrompt();
     setCreatingCustomTest(true);
     setCustomTestLogs([
       { timestamp: new Date().toISOString(), message: 'Starting custom test creation.', level: 'info' },
@@ -7262,7 +7443,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
           name: customTestName.trim(),
           timeLimit: customTestTimeLimit,
           modelId: customTestModel,
-          prompt: customTestPrompt.trim(),
+          prompt,
         }),
       });
       if (data.success) {
@@ -7279,7 +7460,6 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
         ]);
         showCustomMessage('success', 'Custom test created. Ready for students!');
         setCustomTestName('');
-        setCustomTestPrompt('');
         await loadCustomTests();
       } else {
         setCustomTestLogs(prev => [
@@ -7610,6 +7790,35 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
                 <X size={18} />
               </button>
             </div>
+            <div className="form-group">
+              <label className="form-label">Configuration</label>
+              <div className="custom-test-config-grid">
+                <button
+                  type="button"
+                  className={`custom-test-config-card ${customTestConfig === 'jee-main' ? 'active' : ''}`}
+                  onClick={() => applyCustomTestConfig('jee-main')}
+                >
+                  <div className="config-title">JEE Main</div>
+                  <div className="config-meta">75 questions • 25 per subject • Gemini 2.5 Flash</div>
+                </button>
+                <button
+                  type="button"
+                  className={`custom-test-config-card ${customTestConfig === 'jee-advanced' ? 'active' : ''}`}
+                  onClick={() => applyCustomTestConfig('jee-advanced')}
+                >
+                  <div className="config-title">JEE Advanced</div>
+                  <div className="config-meta">180 marks • Extremely hard • Gemini 3 Flash</div>
+                </button>
+                <button
+                  type="button"
+                  className={`custom-test-config-card ${customTestConfig === 'assignment' ? 'active' : ''}`}
+                  onClick={() => applyCustomTestConfig('assignment')}
+                >
+                  <div className="config-title">Assignment</div>
+                  <div className="config-meta">Choose subjects, chapters, difficulty & types</div>
+                </button>
+              </div>
+            </div>
             <div className="form-row">
               <div className="form-group">
                 <label className="form-label">Test name</label>
@@ -7631,31 +7840,176 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
                   onChange={(event) => setCustomTestTimeLimit(Number(event.target.value))}
                 />
               </div>
-              <div className="form-group">
-                <label className="form-label">Model</label>
-                <select
-                  className="form-input"
-                  value={customTestModel}
-                  onChange={(event) => setCustomTestModel(event.target.value)}
-                >
-                  {customTestModels.map(model => (
-                    <option key={model.id} value={model.id}>
-                      {model.label}
-                    </option>
-                  ))}
-                </select>
+            </div>
+            {customTestConfig === 'jee-main' && (
+              <div className="custom-test-config-panel">
+                <div className="form-group">
+                  <label className="form-label">Difficulty</label>
+                  <select
+                    className="form-input"
+                    value={jeeMainDifficulty}
+                    onChange={(event) => setJeeMainDifficulty(event.target.value as 'mixed' | 'easy' | 'hard')}
+                  >
+                    <option value="mixed">Mixed (easy/medium/hard)</option>
+                    <option value="easy">Easy</option>
+                    <option value="hard">Hard</option>
+                  </select>
+                </div>
+                <div className="config-note">
+                  Generates 25 questions each from Physics, Chemistry, and Mathematics with MCQ + NAT mix.
+                </div>
               </div>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Prompt</label>
-              <textarea
-                className="form-input"
-                rows={4}
-                value={customTestPrompt}
-                onChange={(event) => setCustomTestPrompt(event.target.value)}
-                placeholder="Tell the AI how many questions, subjects, chapters, difficulty levels, and question types."
-              />
-            </div>
+            )}
+            {customTestConfig === 'jee-advanced' && (
+              <div className="custom-test-config-panel">
+                <div className="config-note">
+                  Difficulty: <strong>Extremely hard</strong>. Model locked to Gemini 3 Flash.
+                </div>
+              </div>
+            )}
+            {customTestConfig === 'assignment' && (
+              <div className="custom-test-config-panel">
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="form-label">Total questions</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      min={1}
+                      value={assignmentTotalQuestions}
+                      onChange={(event) => setAssignmentTotalQuestions(Number(event.target.value))}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Subject</label>
+                    <select
+                      className="form-input"
+                      value={assignmentSubject}
+                      onChange={(event) => setAssignmentSubject(event.target.value as AssignmentSubject)}
+                    >
+                      {Object.keys(SUBJECT_CHAPTERS).map(subject => (
+                        <option key={subject} value={subject}>
+                          {subject}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Chapters</label>
+                  <div className="chapter-mode-row">
+                    <label className="chapter-mode-option">
+                      <input
+                        type="radio"
+                        name="assignment-chapter-mode"
+                        value="all"
+                        checked={assignmentChapterMode === 'all'}
+                        onChange={() => setAssignmentChapterMode('all')}
+                      />
+                      <span>All chapters</span>
+                    </label>
+                    <label className="chapter-mode-option">
+                      <input
+                        type="radio"
+                        name="assignment-chapter-mode"
+                        value="single"
+                        checked={assignmentChapterMode === 'single'}
+                        onChange={() => setAssignmentChapterMode('single')}
+                      />
+                      <span>Single chapter</span>
+                    </label>
+                    <label className="chapter-mode-option">
+                      <input
+                        type="radio"
+                        name="assignment-chapter-mode"
+                        value="multiple"
+                        checked={assignmentChapterMode === 'multiple'}
+                        onChange={() => setAssignmentChapterMode('multiple')}
+                      />
+                      <span>Multiple chapters</span>
+                    </label>
+                  </div>
+                  {assignmentChapterMode === 'all' ? (
+                    <div className="config-note">All chapters in {assignmentSubject} will be included.</div>
+                  ) : (
+                    <div className="chapter-selector">
+                      <div className="chapter-search-row">
+                        <input
+                          className="form-input"
+                          value={assignmentChapterSearch}
+                          onChange={(event) => setAssignmentChapterSearch(event.target.value)}
+                          placeholder="Search chapters (type 3+ characters)"
+                        />
+                        <span className="chapter-search-hint">
+                          {assignmentChapterSearch.trim().length < 3
+                            ? 'Type 3+ characters to filter'
+                            : `Matches: ${filteredAssignmentChapters.length}`}
+                        </span>
+                      </div>
+                      <div className="chapter-list">
+                        {filteredAssignmentChapters.map(chapter => (
+                          <label key={chapter} className="chapter-option">
+                            <input
+                              type={assignmentChapterMode === 'single' ? 'radio' : 'checkbox'}
+                              name="assignment-chapter"
+                              checked={assignmentSelectedChapters.includes(chapter)}
+                              onChange={() => {
+                                if (assignmentChapterMode === 'single') {
+                                  setAssignmentSelectedChapters([chapter]);
+                                } else {
+                                  setAssignmentSelectedChapters(prev =>
+                                    prev.includes(chapter) ? prev.filter(item => item !== chapter) : [...prev, chapter]
+                                  );
+                                }
+                              }}
+                            />
+                            <span>{chapter}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="form-label">MCQ count</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      min={0}
+                      value={assignmentMcqCount}
+                      onChange={(event) => setAssignmentMcqCount(Number(event.target.value))}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">NAT count</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      min={0}
+                      value={assignmentNatCount}
+                      onChange={(event) => setAssignmentNatCount(Number(event.target.value))}
+                    />
+                  </div>
+                </div>
+                {assignmentQuestionMismatch && (
+                  <div className="config-warning">MCQ + NAT counts should match total questions.</div>
+                )}
+                <div className="form-group">
+                  <label className="form-label">Difficulty</label>
+                  <select
+                    className="form-input"
+                    value={assignmentDifficulty}
+                    onChange={(event) => setAssignmentDifficulty(event.target.value as DifficultyChoice)}
+                  >
+                    <option value="mixed">Mixed (easy/medium/hard)</option>
+                    <option value="easy">Easy</option>
+                    <option value="medium">Medium</option>
+                    <option value="hard">Hard</option>
+                  </select>
+                </div>
+              </div>
+            )}
             <div className="custom-test-log">
               <div className="custom-test-log-header">
                 <span>Creation Log</span>
