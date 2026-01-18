@@ -615,7 +615,7 @@ async function handleCustomTestsCreate(req: VercelRequest, res: VercelResponse) 
   }
 
   try {
-    const questions = await generateCustomTestQuestions({ prompt, modelId });
+    const { questions, logs } = await generateCustomTestQuestions({ prompt, modelId });
     if (questions.length === 0) {
       return res.status(400).json({ error: 'AI returned no questions.' });
     }
@@ -650,7 +650,7 @@ async function handleCustomTestsCreate(req: VercelRequest, res: VercelResponse) 
       select: { id: true, name: true, totalQuestions: true },
     });
 
-    return res.status(200).json({ success: true, test: created });
+    return res.status(200).json({ success: true, test: created, logs });
   } catch (error) {
     console.error('Custom test create error:', error);
     return res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to create test.' });

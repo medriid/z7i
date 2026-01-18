@@ -550,6 +550,21 @@ export type CustomTestGeneratedQuestion = {
   marksNegative?: number;
 };
 
+type CustomTestQuestionOutline = {
+  subject?: string;
+  chapter?: string;
+  difficulty?: string;
+  type?: string;
+  marksPositive?: number;
+  marksNegative?: number;
+  notes?: string;
+};
+
+export type CustomTestGenerationLog = {
+  timestamp: string;
+  message: string;
+};
+
 function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | null {
   const match = /^data:(.+?);base64,(.+)$/.exec(dataUrl);
   if (!match) return null;
@@ -720,19 +735,119 @@ export async function generateCustomTestQuestions({
 }: {
   prompt: string;
   modelId: string;
-}): Promise<CustomTestGeneratedQuestion[]> {
+}): Promise<{ questions: CustomTestGeneratedQuestion[]; logs: CustomTestGenerationLog[] }> {
   if (!isGeminiConfigured()) {
     throw new Error(
       'AI solution service is not configured. Please set GEMINI_API_KEY environment variable.'
     );
   }
 
-  const apiKeys = getGeminiApiKeys();
-  const modelName = resolveCustomTestModel(modelId);
-  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
+  const logs: CustomTestGenerationLog[] = [];
+  const addLog = (message: string) => {
+    logs.push({ timestamp: new Date().toISOString(), message });
+  };
 
-  const systemPrompt = `
-You are an expert test creator for JEE-style exams.
+  const apiKeys = getGeminiApiKeys();
+  const resolveDifficulty = (value?: string) => {
+    if (!value) return 'medium';
+    const normalized = value.toLowerCase();
+    if (normalized.includes('hard')) return 'hard';
+    if (normalized.includes('easy')) return 'easy';
+    return 'medium';
+  };
+  const resolveQuestionType = (value?: string) => {
+    if (!value) return 'MCQ';
+    return value.toUpperCase().includes('NAT') ? 'NAT' : 'MCQ';
+  };
+  const resolveQuestionModel = (difficulty?: string) =>
+    resolveDifficulty(difficulty) === 'hard' ? 'gemini-3-flash' : 'gemini-2.5-flash';
+
+  const callGemini = async ({
+    modelName,
+    systemPrompt,
+    userPrompt,
+    maxOutputTokens,
+    temperature,
+  }: {
+    modelName: string;
+    systemPrompt: string;
+    userPrompt: string;
+    maxOutputTokens: number;
+    temperature: number;
+  }): Promise<string> => {
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
+    const requestBody = {
+      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+      systemInstruction: {
+        parts: [{ text: systemPrompt.trim() }],
+      },
+      generationConfig: {
+        temperature,
+        topK: 40,
+        topP: 0.9,
+        maxOutputTokens,
+      },
+      safetySettings: [
+        { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+      ],
+    };
+
+    let lastError: unknown;
+    for (let i = 0; i < apiKeys.length; ++i) {
+      const apiKey = apiKeys[i];
+      try {
+        const response = await fetch(`${apiUrl}?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          const errorData = (await response.json().catch(() => ({}))) as GeminiErrorResponse;
+          const errorMsg = errorData.error?.message || '';
+          if (response.status === 429 || /rate.?limit|quota|exceeded|too many/i.test(errorMsg)) {
+            lastError = new Error(`Gemini API key #${i} rate limited: ${errorMsg}`);
+            continue;
+          }
+          throw new Error(`Gemini API error (${response.status}): ${errorMsg || 'Unknown error'}`);
+        }
+
+        const data = (await response.json()) as GeminiResponse;
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+        if (!text) {
+          throw new Error('Empty response returned from Gemini API');
+        }
+        return text;
+      } catch (error) {
+        lastError = error;
+        if (
+          !(error instanceof Error) ||
+          !/rate.?limit|quota|exceeded|too many/i.test(error.message || '')
+        ) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError || new Error('All Gemini API keys failed or rate limited.');
+  };
+
+  const parseJsonPayload = <T>(text: string, errorMessage: string): T => {
+    const jsonText = extractJsonBlock(text);
+    try {
+      return JSON.parse(jsonText) as T;
+    } catch (error) {
+      throw new Error(`${errorMessage}: ${(error as Error).message}`);
+    }
+  };
+
+  const generateOutline = async () => {
+    addLog('Planning question blueprint with Gemini 2.5 Flash Lite.');
+    const systemPrompt = `
+You are an expert test planner for JEE-style exams.
 Return ONLY valid JSON without markdown.
 Output format:
 {
@@ -742,84 +857,127 @@ Output format:
       "chapter": "Kinematics",
       "difficulty": "easy|medium|hard",
       "type": "MCQ" or "NAT",
-      "question": "Question text in HTML-safe plain text",
-      "options": ["Option A", "Option B", "Option C", "Option D"],
-      "answer": "A/B/C/D or numeric value as string",
       "marksPositive": 4,
-      "marksNegative": 1
+      "marksNegative": 1,
+      "notes": "Short intent of the question"
     }
   ]
+}
+Rules:
+- Keep notes under 20 words.
+- Match the user's requested mix of subjects, chapters, difficulty, and types.
+`;
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const text = await callGemini({
+          modelName: 'gemini-2.5-flash-lite',
+          systemPrompt,
+          userPrompt: `User prompt:\n${prompt}`,
+          maxOutputTokens: 2500,
+          temperature: 0.3,
+        });
+        const parsed = parseJsonPayload<{ questions: CustomTestQuestionOutline[] }>(
+          text,
+          'Outline response was not valid JSON'
+        );
+        if (!parsed.questions || !Array.isArray(parsed.questions) || parsed.questions.length === 0) {
+          throw new Error('Outline did not include any questions.');
+        }
+        addLog(`Outline ready with ${parsed.questions.length} questions.`);
+        return parsed.questions;
+      } catch (error) {
+        lastError = error as Error;
+        addLog('Retrying outline generation due to JSON formatting issue.');
+      }
+    }
+    throw lastError || new Error('Failed to generate outline.');
+  };
+
+  const generateQuestion = async (outline: CustomTestQuestionOutline, index: number) => {
+    const difficulty = resolveDifficulty(outline.difficulty);
+    const questionType = resolveQuestionType(outline.type);
+    const modelName = resolveQuestionModel(difficulty);
+    addLog(
+      `Generating Q${index + 1} (${outline.subject || 'General'} | ${outline.chapter || 'Mixed'} | ${difficulty}) with ${modelName}.`
+    );
+    const systemPrompt = `
+You are an expert JEE question writer.
+Return ONLY valid JSON without markdown.
+Output format:
+{
+  "subject": "Physics",
+  "chapter": "Kinematics",
+  "difficulty": "easy|medium|hard",
+  "type": "MCQ" or "NAT",
+  "question": "Question text in HTML-safe plain text",
+  "options": ["Option A", "Option B", "Option C", "Option D"],
+  "answer": "A/B/C/D or numeric value as string",
+  "marksPositive": 4,
+  "marksNegative": 1
 }
 Rules:
 - If type is NAT, omit options.
 - If type is MCQ, include exactly 4 options.
 - Ensure answer matches the type.
 - Keep HTML minimal (use <br/> for line breaks if needed).
+- Escape any quotes inside strings.
 `;
+    const userPrompt = `
+Create a single question using these constraints:
+Subject: ${outline.subject || 'Mixed'}
+Chapter: ${outline.chapter || 'Mixed'}
+Difficulty: ${difficulty}
+Type: ${questionType}
+Marks: +${outline.marksPositive ?? 4}, -${outline.marksNegative ?? 1}
+Notes: ${outline.notes || 'Follow the user prompt intent.'}
 
-  const requestBody = {
-    contents: [{ role: 'user', parts: [{ text: `User prompt:\n${prompt}` }] }],
-    systemInstruction: {
-      parts: [{ text: systemPrompt.trim() }],
-    },
-    generationConfig: {
-      temperature: 0.4,
-      topK: 40,
-      topP: 0.9,
-      maxOutputTokens: 6000,
-    },
-    safetySettings: [
-      { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-    ],
-  };
-
-  let lastError: unknown;
-  for (let i = 0; i < apiKeys.length; ++i) {
-    const apiKey = apiKeys[i];
-    try {
-      const response = await fetch(`${apiUrl}?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        const errorData = (await response.json().catch(() => ({}))) as GeminiErrorResponse;
-        const errorMsg = errorData.error?.message || '';
-        if (response.status === 429 || /rate.?limit|quota|exceeded|too many/i.test(errorMsg)) {
-          lastError = new Error(`Gemini API key #${i} rate limited: ${errorMsg}`);
-          continue;
+User prompt:
+${prompt}
+`;
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const text = await callGemini({
+          modelName,
+          systemPrompt,
+          userPrompt,
+          maxOutputTokens: 1500,
+          temperature: 0.35,
+        });
+        const parsed = parseJsonPayload<CustomTestGeneratedQuestion>(
+          text,
+          'Question response was not valid JSON'
+        );
+        parsed.type = resolveQuestionType(parsed.type || questionType);
+        parsed.difficulty = resolveDifficulty(parsed.difficulty || difficulty);
+        parsed.subject = parsed.subject || outline.subject;
+        parsed.chapter = parsed.chapter || outline.chapter;
+        parsed.marksPositive = parsed.marksPositive ?? outline.marksPositive ?? 4;
+        parsed.marksNegative = parsed.marksNegative ?? outline.marksNegative ?? 1;
+        if (parsed.type === 'MCQ') {
+          parsed.options = (parsed.options || []).slice(0, 4);
+        } else {
+          delete parsed.options;
         }
-        throw new Error(`Gemini API error (${response.status}): ${errorMsg || 'Unknown error'}`);
-      }
-
-      const data = (await response.json()) as GeminiResponse;
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) {
-        throw new Error('AI did not return any questions.');
-      }
-
-      const jsonText = extractJsonBlock(text);
-      const parsed = JSON.parse(jsonText) as { questions: CustomTestGeneratedQuestion[] };
-      if (!parsed.questions || !Array.isArray(parsed.questions)) {
-        throw new Error('AI response did not include questions.');
-      }
-      return parsed.questions;
-    } catch (error) {
-      lastError = error;
-      if (
-        !(error instanceof Error) ||
-        !/rate.?limit|quota|exceeded|too many/i.test(error.message || '')
-      ) {
-        throw error;
+        return parsed;
+      } catch (error) {
+        lastError = error as Error;
+        addLog(`Retrying Q${index + 1} due to JSON formatting issue.`);
       }
     }
-  }
+    throw lastError || new Error('Failed to generate question.');
+  };
 
-  throw lastError || new Error('All Gemini API keys failed or rate limited.');
+  addLog(`Starting custom test generation (model preference: ${modelId}).`);
+  const outline = await generateOutline();
+  const questions: CustomTestGeneratedQuestion[] = [];
+  for (let i = 0; i < outline.length; i += 1) {
+    const question = await generateQuestion(outline[i], i);
+    questions.push(question);
+  }
+  addLog('All questions generated.');
+  return { questions, logs };
 }
 
 

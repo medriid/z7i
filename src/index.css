@@ -12239,6 +12239,66 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
+.custom-test-log {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  background: var(--surface-alt, rgba(255, 255, 255, 0.02));
+  display: grid;
+  gap: 0.5rem;
+}
+
+.custom-test-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.custom-test-log-status {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.custom-test-log-body {
+  max-height: 180px;
+  overflow-y: auto;
+  font-size: 0.85rem;
+}
+
+.custom-test-log-body ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.custom-test-log-empty {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.custom-test-log-item {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 0.5rem;
+}
+
+.custom-test-log-time {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.custom-test-log-item.success .custom-test-log-message {
+  color: var(--success);
+}
+
+.custom-test-log-item.error .custom-test-log-message {
+  color: var(--danger);
+}
+
 .custom-results-header {
   display: flex;
   align-items: center;
