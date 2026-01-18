@@ -609,13 +609,34 @@ function resolveCustomTestModel(modelId: string): string {
 }
 
 function extractJsonBlock(text: string) {
-  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fenced) return fenced[1].trim();
-  const firstBrace = text.indexOf('{');
-  const lastBrace = text.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    return text.slice(firstBrace, lastBrace + 1);
+
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    if (trimmed.endsWith('}') || trimmed.endsWith(']')) {
+      return trimmed;
+    }
   }
+
+  const firstBrace = text.indexOf('{');
+  const firstBracket = text.indexOf('[');
+  const hasBrace = firstBrace !== -1;
+  const hasBracket = firstBracket !== -1;
+
+  if (!hasBrace && !hasBracket) {
+    throw new Error('Unable to parse AI response.');
+  }
+
+  const startIndex = hasBrace && hasBracket ? Math.min(firstBrace, firstBracket) : hasBrace ? firstBrace : firstBracket;
+  const startChar = text[startIndex];
+  const endChar = startChar === '[' ? ']' : '}';
+  const endIndex = text.lastIndexOf(endChar);
+
+  if (endIndex !== -1 && endIndex > startIndex) {
+    return text.slice(startIndex, endIndex + 1);
+  }
+
   throw new Error('Unable to parse AI response.');
 }
 
