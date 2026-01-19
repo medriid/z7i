@@ -956,7 +956,7 @@ Rules:
           modelName: outlineModelName,
           systemPrompt,
           userPrompt: `User prompt:\n${prompt}`,
-          maxOutputTokens: 2500,
+          maxOutputTokens: 3500,
           temperature: 0.3,
         });
         const parsed = parseJsonPayload<{ questions: CustomTestQuestionOutline[] }>(
@@ -1002,6 +1002,7 @@ Rules:
 - If type is NAT, omit options.
 - If type is MCQ, include exactly 4 options.
 - Ensure answer matches the type.
+- Return exactly one question JSON object (no additional questions).
 - Keep HTML minimal (use <br/> for line breaks if needed).
 - Escape any quotes inside strings.
 `;
@@ -1024,7 +1025,7 @@ ${prompt}
           modelName,
           systemPrompt,
           userPrompt,
-          maxOutputTokens: 1500,
+          maxOutputTokens: 4000,
           temperature: 0.35,
         });
         const parsed = parseJsonPayload<CustomTestGeneratedQuestion>(
