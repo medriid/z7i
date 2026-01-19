@@ -11,7 +11,7 @@ import {
   FileText, User, Eye, Bookmark, StickyNote,
   MessageCircle, X, Send, ChevronRight, Users, Timer, Trash2, Gift, Shield, Trophy, Medal, Edit3,
   Search, PenTool, MessageSquare, Settings, Key, Mail, AlertTriangle, Unlink, Save, Plus, List,
-  Sun, Moon, Filter, RotateCcw, Shuffle, Download, Share2, Copy, Brain, Layers, Zap, Sparkles, Palette, Pin
+  Sun, Moon, Filter, RotateCcw, Shuffle, Download, Share2, Copy, Brain, Layers, Zap, Sparkles, Palette, Pin, Folder
 } from 'lucide-react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -66,6 +66,8 @@ interface UserType {
   lastSyncAt?: string;
   syncStatus?: string;
   canUseAiSolutions?: boolean;
+  streakCount?: number;
+  lastStreakAt?: string | null;
   themeMode?: Theme;
   themeCustomEnabled?: boolean;
   themeAccent?: string | null;
@@ -106,6 +108,8 @@ interface CustomTest {
   timeLimit: number;
   totalQuestions: number;
   status: string;
+  isShared?: boolean;
+  isManual?: boolean;
   createdAt: string;
   attempt: null | {
     id: string;
@@ -119,6 +123,18 @@ interface CustomTest {
     accuracy: number | null;
     updatedAt: string;
   };
+}
+
+interface CustomTestPreviewQuestion {
+  subject?: string;
+  chapter?: string;
+  difficulty?: string;
+  type: string;
+  question: string;
+  options?: string[];
+  answer: string;
+  marksPositive?: number;
+  marksNegative?: number;
 }
 
 type CustomTestConfig = 'jee-main' | 'jee-advanced' | 'assignment';
@@ -2012,12 +2028,16 @@ function CustomTestCard({
   test,
   onStart,
   onResume,
-  onViewResults
+  onViewResults,
+  onDelete,
+  canDelete,
 }: {
   test: CustomTest;
   onStart: () => void;
   onResume: () => void;
   onViewResults: () => void;
+  onDelete?: () => void;
+  canDelete?: boolean;
 }) {
   const attempt = test.attempt;
   const isSubmitted = attempt?.status === 'submitted';
@@ -2034,6 +2054,8 @@ function CustomTestCard({
           <span>{test.totalQuestions} questions</span>
           <span>{test.timeLimit} min</span>
           <span className="custom-test-status">{statusLabel}</span>
+          {test.isManual && <span className="custom-test-pill">Manual</span>}
+          {test.isShared && <span className="custom-test-pill">Shared</span>}
         </div>
       </div>
       {attempt && isSubmitted && (
@@ -2046,6 +2068,11 @@ function CustomTestCard({
         <button className="btn btn-secondary" onClick={actionHandler} disabled={!isReady}>
           {actionLabel}
         </button>
+        {canDelete && onDelete && (
+          <button className="btn btn-secondary danger" onClick={onDelete}>
+            <Trash2 size={16} />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -2054,6 +2081,8 @@ function CustomTestCard({
 interface BookmarkedQuestion {
   id: string;
   questionId: string;
+  groupId?: string | null;
+  groupName?: string | null;
   createdAt: string;
   question: {
     id: string;
@@ -2081,10 +2110,18 @@ interface BookmarkedQuestion {
   };
 }
 
+interface BookmarkGroup {
+  id: string;
+  name: string;
+}
+
 function BookmarksView({ onBack }: { onBack: () => void }) {
   const [bookmarks, setBookmarks] = useState<BookmarkedQuestion[]>([]);
   const [loading, setLoading] = useState(true);
-  const [groupBy, setGroupBy] = useState<'test' | 'subject'>('test');
+  const [groupBy, setGroupBy] = useState<'test' | 'subject' | 'group'>('test');
+  const [bookmarkGroups, setBookmarkGroups] = useState<BookmarkGroup[]>([]);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [groupMessage, setGroupMessage] = useState<string | null>(null);
   const [expandedQuestion, setExpandedQuestion] = useState<string | null>(null);
   const [activeMode, setActiveMode] = useState<'list' | 'flashcard' | 'practice'>('list');
   const [flashcardIndex, setFlashcardIndex] = useState(0);
@@ -2099,6 +2136,7 @@ function BookmarksView({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     loadBookmarks();
+    loadBookmarkGroups();
   }, []);
 
   const loadBookmarks = async () => {
@@ -2121,6 +2159,53 @@ function BookmarksView({ onBack }: { onBack: () => void }) {
       console.error('Failed to load bookmarks:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadBookmarkGroups = async () => {
+    try {
+      const data = await apiRequest('/z7i?action=bookmark-groups');
+      if (data.success) {
+        setBookmarkGroups(data.groups);
+      }
+    } catch (err) {
+      console.error('Failed to load bookmark groups:', err);
+    }
+  };
+
+  const handleCreateGroup = async () => {
+    if (!newGroupName.trim()) return;
+    try {
+      const data = await apiRequest('/z7i?action=bookmark-group-create', {
+        method: 'POST',
+        body: JSON.stringify({ name: newGroupName.trim() })
+      });
+      if (data.success) {
+        setBookmarkGroups(prev => [...prev, data.group]);
+        setNewGroupName('');
+        setGroupMessage('Group created.');
+        setTimeout(() => setGroupMessage(null), 3000);
+      }
+    } catch (err) {
+      console.error('Failed to create group:', err);
+    }
+  };
+
+  const handleAssignGroup = async (questionId: string, groupId: string | null) => {
+    try {
+      const data = await apiRequest('/z7i?action=bookmark-group-assign', {
+        method: 'POST',
+        body: JSON.stringify({ questionId, groupId })
+      });
+      if (data.success) {
+        setBookmarks(prev => prev.map(item => (
+          item.questionId === questionId
+            ? { ...item, groupId, groupName: groupId ? bookmarkGroups.find(g => g.id === groupId)?.name || null : null }
+            : item
+        )));
+      }
+    } catch (err) {
+      console.error('Failed to assign group:', err);
     }
   };
 
@@ -2254,7 +2339,9 @@ function BookmarksView({ onBack }: { onBack: () => void }) {
   const groupedBookmarks = bookmarks.reduce((acc, bookmark) => {
     const key = groupBy === 'test' 
       ? bookmark.test.testName 
-      : bookmark.question.subject;
+      : groupBy === 'subject'
+      ? bookmark.question.subject
+      : bookmark.groupName || 'Ungrouped';
     if (!acc[key]) {
       acc[key] = [];
     }
@@ -2392,6 +2479,29 @@ function BookmarksView({ onBack }: { onBack: () => void }) {
                 <BarChart3 size={14} />
                 Subject
               </button>
+              <button
+                className={`toggle-btn ${groupBy === 'group' ? 'active' : ''}`}
+                onClick={() => setGroupBy('group')}
+              >
+                <Folder size={14} />
+                Group
+              </button>
+            </div>
+
+            <div className="bookmarks-group-manager">
+              <div className="group-manager-title">Bookmark Groups</div>
+              <div className="group-manager-row">
+                <input
+                  className="form-input"
+                  placeholder="New group name"
+                  value={newGroupName}
+                  onChange={(event) => setNewGroupName(event.target.value)}
+                />
+                <button className="btn btn-secondary btn-small" onClick={handleCreateGroup} disabled={!newGroupName.trim()}>
+                  Create
+                </button>
+              </div>
+              {groupMessage && <div className="group-manager-message">{groupMessage}</div>}
             </div>
           </div>
         )}
@@ -2614,6 +2724,17 @@ function BookmarksView({ onBack }: { onBack: () => void }) {
                             <span className="bookmark-marks">
                               {bookmark.question.status === 'correct' ? '+' : ''}{bookmark.question.scoreObtained}/{bookmark.question.marksPositive}
                             </span>
+                            <select
+                              className="bookmark-group-select"
+                              value={bookmark.groupId || ''}
+                              onClick={(event) => event.stopPropagation()}
+                              onChange={(event) => handleAssignGroup(bookmark.questionId, event.target.value || null)}
+                            >
+                              <option value="">Ungrouped</option>
+                              {bookmarkGroups.map(group => (
+                                <option key={group.id} value={group.id}>{group.name}</option>
+                              ))}
+                            </select>
                             <button 
                               className="bookmark-remove"
                               onClick={(e) => {
@@ -3489,9 +3610,9 @@ function AiChatbotsPage({ onBack }: { onBack: () => void }) {
       kind: 'text',
     },
     {
-      id: 'hf:imagepipeline/flux_uncensored_nsfw_v2',
-      label: 'Flux Uncensored v2 Image (Hugging Face)',
-      description: 'Generate images with the imagepipeline/flux_uncensored_nsfw_v2 model.',
+      id: 'hf:stabilityai/stable-diffusion-xl-base-1.0',
+      label: 'SDXL Base Image (Hugging Face)',
+      description: 'Generate study-friendly diagrams with the stabilityai/stable-diffusion-xl-base-1.0 model.',
       kind: 'image',
     },
   ];
@@ -7200,6 +7321,13 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
   const [customTestLogs, setCustomTestLogs] = useState<Array<{ timestamp: string; message: string; level: 'info' | 'success' | 'error' }>>([]);
   const [customExamTestId, setCustomExamTestId] = useState<string | null>(null);
   const [customResultsAttemptId, setCustomResultsAttemptId] = useState<string | null>(null);
+  const [topicMastery, setTopicMastery] = useState<Array<{ name: string; total: number; correct: number; incorrect: number; unattempted: number; accuracy: number }>>([]);
+  const [loadingTopicMastery, setLoadingTopicMastery] = useState(false);
+  const [previewQuestions, setPreviewQuestions] = useState<CustomTestPreviewQuestion[]>([]);
+  const [previewSelected, setPreviewSelected] = useState<Set<number>>(new Set());
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [manualTestJson, setManualTestJson] = useState('');
+  const [manualTestError, setManualTestError] = useState<string | null>(null);
   
   const isOwnerUser = Boolean(user.isOwner);
   const sortedTests = useMemo(() => {
@@ -7279,6 +7407,21 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     }
   }, [user.z7iLinked]);
 
+  const refreshStreak = useCallback(async () => {
+    try {
+      const data = await apiRequest('/auth?action=streak', { method: 'POST' });
+      if (data.success && data.streak) {
+        onUserUpdate({
+          ...user,
+          streakCount: data.streak.streakCount,
+          lastStreakAt: data.streak.lastStreakAt,
+        });
+      }
+    } catch {
+      console.error('Failed to update streak');
+    }
+  }, [user, onUserUpdate]);
+
   const loadCustomTests = useCallback(async () => {
     setLoadingCustomTests(true);
     try {
@@ -7293,6 +7436,21 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     }
   }, []);
 
+  const loadTopicMastery = useCallback(async () => {
+    if (!user.z7iLinked) return;
+    setLoadingTopicMastery(true);
+    try {
+      const data = await apiRequest('/z7i?action=topic-mastery');
+      if (data.success) {
+        setTopicMastery(data.subjects);
+      }
+    } catch {
+      console.error('Failed to load topic mastery');
+    } finally {
+      setLoadingTopicMastery(false);
+    }
+  }, [user.z7iLinked]);
+
   useEffect(() => {
     loadTests();
   }, [loadTests]);
@@ -7300,6 +7458,14 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
   useEffect(() => {
     loadCustomTests();
   }, [loadCustomTests]);
+
+  useEffect(() => {
+    refreshStreak();
+  }, [refreshStreak]);
+
+  useEffect(() => {
+    loadTopicMastery();
+  }, [loadTopicMastery]);
 
   useEffect(() => {
     if (!testsWithoutQuestions.length) {
@@ -7476,6 +7642,161 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
       showCustomMessage('error', 'Failed to create custom test.');
     } finally {
       setCreatingCustomTest(false);
+    }
+  };
+
+  const handlePreviewCustomTest = async () => {
+    const prompt = buildCustomTestPrompt();
+    setPreviewLoading(true);
+    setPreviewSelected(new Set());
+    try {
+      const data = await apiRequest('/auth?action=custom-tests-preview', {
+        method: 'POST',
+        body: JSON.stringify({ modelId: customTestModel, prompt }),
+      });
+      if (data.success) {
+        setPreviewQuestions(data.questions || []);
+        showCustomMessage('success', 'Preview ready. Select questions to regenerate or save.');
+      } else {
+        showCustomMessage('error', data.error || 'Failed to preview questions.');
+      }
+    } catch {
+      showCustomMessage('error', 'Failed to preview questions.');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleRegeneratePreview = async () => {
+    if (previewSelected.size === 0) return;
+    const prompt = buildCustomTestPrompt();
+    setPreviewLoading(true);
+    try {
+      const data = await apiRequest('/auth?action=custom-tests-regenerate', {
+        method: 'POST',
+        body: JSON.stringify({ modelId: customTestModel, prompt, indices: Array.from(previewSelected) }),
+      });
+      if (data.success) {
+        setPreviewQuestions(prev => {
+          const next = [...prev];
+          data.replacements.forEach((replacement: { index: number; question: CustomTestPreviewQuestion }) => {
+            if (replacement.question) {
+              next[replacement.index] = replacement.question;
+            }
+          });
+          return next;
+        });
+        setPreviewSelected(new Set());
+      }
+    } catch {
+      showCustomMessage('error', 'Failed to regenerate selected questions.');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleSavePreviewTest = async () => {
+    if (!customTestName.trim()) {
+      showCustomMessage('error', 'Test name is required.');
+      return;
+    }
+    if (previewQuestions.length === 0) {
+      showCustomMessage('error', 'Preview questions are required.');
+      return;
+    }
+    setCreatingCustomTest(true);
+    try {
+      const data = await apiRequest('/auth?action=custom-tests-save', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: customTestName.trim(),
+          timeLimit: customTestTimeLimit,
+          modelId: customTestModel,
+          prompt: buildCustomTestPrompt(),
+          questions: previewQuestions,
+        }),
+      });
+      if (data.success) {
+        showCustomMessage('success', 'Custom test saved.');
+        setPreviewQuestions([]);
+        setCustomTestName('');
+        await loadCustomTests();
+      } else {
+        showCustomMessage('error', data.error || 'Failed to save custom test.');
+      }
+    } catch {
+      showCustomMessage('error', 'Failed to save custom test.');
+    } finally {
+      setCreatingCustomTest(false);
+    }
+  };
+
+  const parseManualQuestions = (): CustomTestPreviewQuestion[] | null => {
+    if (!manualTestJson.trim()) return [];
+    try {
+      const parsed = JSON.parse(manualTestJson);
+      if (!Array.isArray(parsed)) {
+        setManualTestError('Manual test JSON must be an array of questions.');
+        return null;
+      }
+      setManualTestError(null);
+      return parsed;
+    } catch {
+      setManualTestError('Invalid JSON format.');
+      return null;
+    }
+  };
+
+  const handleCreateManualTest = async () => {
+    if (!customTestName.trim()) {
+      showCustomMessage('error', 'Test name is required.');
+      return;
+    }
+    const parsed = parseManualQuestions();
+    if (!parsed) return;
+    if (parsed.length === 0) {
+      showCustomMessage('error', 'Add at least one question.');
+      return;
+    }
+    setCreatingCustomTest(true);
+    try {
+      const data = await apiRequest('/auth?action=custom-tests-create-manual', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: customTestName.trim(),
+          timeLimit: customTestTimeLimit,
+          questions: parsed,
+        }),
+      });
+      if (data.success) {
+        showCustomMessage('success', 'Manual custom test shared.');
+        setManualTestJson('');
+        setCustomTestName('');
+        await loadCustomTests();
+      } else {
+        showCustomMessage('error', data.error || 'Failed to share manual test.');
+      }
+    } catch {
+      showCustomMessage('error', 'Failed to share manual test.');
+    } finally {
+      setCreatingCustomTest(false);
+    }
+  };
+
+  const handleDeleteCustomTest = async (testId: string) => {
+    try {
+      const data = await apiRequest('/auth?action=custom-tests-delete', {
+        method: 'POST',
+        body: JSON.stringify({ testId }),
+      });
+      if (data.success) {
+        await loadCustomTests();
+        showCustomMessage('success', 'Custom test deleted.');
+      } else {
+        showCustomMessage('error', data.error || 'Failed to delete test.');
+      }
+    } catch {
+      showCustomMessage('error', 'Failed to delete test.');
     }
   };
 
@@ -7766,7 +8087,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
       <div className="custom-tests-header">
         <div>
           <h2>Custom Tests</h2>
-          <p className="custom-tests-description">Owner-generated papers available to everyone.</p>
+          <p className="custom-tests-description">Owner and community shared papers available to everyone.</p>
         </div>
       </div>
 
@@ -7776,7 +8097,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
         </div>
       )}
 
-      {showCustomTestPanel && isOwnerUser && (
+      {showCustomTestPanel && (
         <div
           className="modal-overlay"
           onClick={(event) => event.target === event.currentTarget && setShowCustomTestPanel(false)}
@@ -7784,262 +8105,325 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
           <div className="modal custom-test-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
               <h2 className="modal-title">
-                <Sparkles size={18} /> Create Custom Test
+                <Sparkles size={18} /> {isOwnerUser ? 'Create Custom Test' : 'Share Manual Test'}
               </h2>
               <button className="modal-close" onClick={() => setShowCustomTestPanel(false)}>
                 <X size={18} />
               </button>
             </div>
-            <div className="form-group">
-              <label className="form-label">Configuration</label>
-              <div className="custom-test-config-grid">
-                <button
-                  type="button"
-                  className={`custom-test-config-card ${customTestConfig === 'jee-main' ? 'active' : ''}`}
-                  onClick={() => applyCustomTestConfig('jee-main')}
-                >
-                  <div className="config-title">JEE Main</div>
-                  <div className="config-meta">75 questions • 25 per subject • Gemini 2.5 Flash</div>
-                </button>
-                <button
-                  type="button"
-                  className={`custom-test-config-card ${customTestConfig === 'jee-advanced' ? 'active' : ''}`}
-                  onClick={() => applyCustomTestConfig('jee-advanced')}
-                >
-                  <div className="config-title">JEE Advanced</div>
-                  <div className="config-meta">180 marks • Extremely hard • Gemini 3 Flash</div>
-                </button>
-                <button
-                  type="button"
-                  className={`custom-test-config-card ${customTestConfig === 'assignment' ? 'active' : ''}`}
-                  onClick={() => applyCustomTestConfig('assignment')}
-                >
-                  <div className="config-title">Assignment</div>
-                  <div className="config-meta">Choose subjects, chapters, difficulty & types</div>
-                </button>
-              </div>
-            </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label className="form-label">Test name</label>
-                <input
-                  className="form-input"
-                  value={customTestName}
-                  onChange={(event) => setCustomTestName(event.target.value)}
-                  placeholder="e.g. JEE Mixed Drill #1"
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Time limit (minutes)</label>
-                <input
-                  className="form-input"
-                  type="number"
-                  min={10}
-                  max={300}
-                  value={customTestTimeLimit}
-                  onChange={(event) => setCustomTestTimeLimit(Number(event.target.value))}
-                />
-              </div>
-            </div>
-            {customTestConfig === 'jee-main' && (
-              <div className="custom-test-config-panel">
+            {isOwnerUser ? (
+              <>
                 <div className="form-group">
-                  <label className="form-label">Difficulty</label>
-                  <select
-                    className="form-input"
-                    value={jeeMainDifficulty}
-                    onChange={(event) => setJeeMainDifficulty(event.target.value as 'mixed' | 'easy' | 'hard')}
-                  >
-                    <option value="mixed">Mixed (easy/medium/hard)</option>
-                    <option value="easy">Easy</option>
-                    <option value="hard">Hard</option>
-                  </select>
+                  <label className="form-label">Configuration</label>
+                  <div className="custom-test-config-grid">
+                    <button
+                      type="button"
+                      className={`custom-test-config-card ${customTestConfig === 'jee-main' ? 'active' : ''}`}
+                      onClick={() => applyCustomTestConfig('jee-main')}
+                    >
+                      <div className="config-title">JEE Main</div>
+                      <div className="config-meta">75 questions • 25 per subject • Gemini 2.5 Flash</div>
+                    </button>
+                    <button
+                      type="button"
+                      className={`custom-test-config-card ${customTestConfig === 'jee-advanced' ? 'active' : ''}`}
+                      onClick={() => applyCustomTestConfig('jee-advanced')}
+                    >
+                      <div className="config-title">JEE Advanced</div>
+                      <div className="config-meta">180 marks • Extremely hard • Gemini 3 Flash</div>
+                    </button>
+                    <button
+                      type="button"
+                      className={`custom-test-config-card ${customTestConfig === 'assignment' ? 'active' : ''}`}
+                      onClick={() => applyCustomTestConfig('assignment')}
+                    >
+                      <div className="config-title">Assignment</div>
+                      <div className="config-meta">Choose subjects, chapters, difficulty & types</div>
+                    </button>
+                  </div>
                 </div>
-                <div className="config-note">
-                  Generates 25 questions each from Physics, Chemistry, and Mathematics with MCQ + NAT mix.
-                </div>
-              </div>
-            )}
-            {customTestConfig === 'jee-advanced' && (
-              <div className="custom-test-config-panel">
-                <div className="config-note">
-                  Difficulty: <strong>Extremely hard</strong>. Model locked to Gemini 3 Flash.
-                </div>
-              </div>
-            )}
-            {customTestConfig === 'assignment' && (
-              <div className="custom-test-config-panel">
                 <div className="form-row">
                   <div className="form-group">
-                    <label className="form-label">Total questions</label>
+                    <label className="form-label">Test name</label>
                     <input
                       className="form-input"
-                      type="number"
-                      min={1}
-                      value={assignmentTotalQuestions}
-                      onChange={(event) => setAssignmentTotalQuestions(Number(event.target.value))}
+                      value={customTestName}
+                      onChange={(event) => setCustomTestName(event.target.value)}
+                      placeholder="e.g. JEE Mixed Drill #1"
                     />
                   </div>
                   <div className="form-group">
-                    <label className="form-label">Subject</label>
-                    <select
+                    <label className="form-label">Time limit (minutes)</label>
+                    <input
                       className="form-input"
-                      value={assignmentSubject}
-                      onChange={(event) => setAssignmentSubject(event.target.value as AssignmentSubject)}
-                    >
-                      {Object.keys(SUBJECT_CHAPTERS).map(subject => (
-                        <option key={subject} value={subject}>
-                          {subject}
-                        </option>
-                      ))}
-                    </select>
+                      type="number"
+                      min={10}
+                      max={300}
+                      value={customTestTimeLimit}
+                      onChange={(event) => setCustomTestTimeLimit(Number(event.target.value))}
+                    />
                   </div>
                 </div>
-                <div className="form-group">
-                  <label className="form-label">Chapters</label>
-                  <div className="chapter-mode-row">
-                    <label className="chapter-mode-option">
-                      <input
-                        type="radio"
-                        name="assignment-chapter-mode"
-                        value="all"
-                        checked={assignmentChapterMode === 'all'}
-                        onChange={() => setAssignmentChapterMode('all')}
-                      />
-                      <span>All chapters</span>
-                    </label>
-                    <label className="chapter-mode-option">
-                      <input
-                        type="radio"
-                        name="assignment-chapter-mode"
-                        value="single"
-                        checked={assignmentChapterMode === 'single'}
-                        onChange={() => setAssignmentChapterMode('single')}
-                      />
-                      <span>Single chapter</span>
-                    </label>
-                    <label className="chapter-mode-option">
-                      <input
-                        type="radio"
-                        name="assignment-chapter-mode"
-                        value="multiple"
-                        checked={assignmentChapterMode === 'multiple'}
-                        onChange={() => setAssignmentChapterMode('multiple')}
-                      />
-                      <span>Multiple chapters</span>
-                    </label>
+                {customTestConfig === 'jee-main' && (
+                  <div className="custom-test-config-panel">
+                    <div className="form-group">
+                      <label className="form-label">Difficulty</label>
+                      <select
+                        className="form-input"
+                        value={jeeMainDifficulty}
+                        onChange={(event) => setJeeMainDifficulty(event.target.value as 'mixed' | 'easy' | 'hard')}
+                      >
+                        <option value="mixed">Mixed (easy/medium/hard)</option>
+                        <option value="easy">Easy</option>
+                        <option value="hard">Hard</option>
+                      </select>
+                    </div>
+                    <div className="config-note">
+                      Generates 25 questions each from Physics, Chemistry, and Mathematics with MCQ + NAT mix.
+                    </div>
                   </div>
-                  {assignmentChapterMode === 'all' ? (
-                    <div className="config-note">All chapters in {assignmentSubject} will be included.</div>
-                  ) : (
-                    <div className="chapter-selector">
-                      <div className="chapter-search-row">
+                )}
+                {customTestConfig === 'jee-advanced' && (
+                  <div className="custom-test-config-panel">
+                    <div className="config-note">
+                      Difficulty: <strong>Extremely hard</strong>. Model locked to Gemini 3 Flash.
+                    </div>
+                  </div>
+                )}
+                {customTestConfig === 'assignment' && (
+                  <div className="custom-test-config-panel">
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label className="form-label">Total questions</label>
                         <input
                           className="form-input"
-                          value={assignmentChapterSearch}
-                          onChange={(event) => setAssignmentChapterSearch(event.target.value)}
-                          placeholder="Search chapters (type 3+ characters)"
+                          type="number"
+                          min={1}
+                          value={assignmentTotalQuestions}
+                          onChange={(event) => setAssignmentTotalQuestions(Number(event.target.value))}
                         />
-                        <span className="chapter-search-hint">
-                          {assignmentChapterSearch.trim().length < 3
-                            ? 'Type 3+ characters to filter'
-                            : `Matches: ${filteredAssignmentChapters.length}`}
-                        </span>
                       </div>
-                      <div className="chapter-list">
-                        {filteredAssignmentChapters.map(chapter => (
-                          <label key={chapter} className="chapter-option">
-                            <input
-                              type={assignmentChapterMode === 'single' ? 'radio' : 'checkbox'}
-                              name="assignment-chapter"
-                              checked={assignmentSelectedChapters.includes(chapter)}
-                              onChange={() => {
-                                if (assignmentChapterMode === 'single') {
-                                  setAssignmentSelectedChapters([chapter]);
-                                } else {
-                                  setAssignmentSelectedChapters(prev =>
-                                    prev.includes(chapter) ? prev.filter(item => item !== chapter) : [...prev, chapter]
-                                  );
-                                }
-                              }}
-                            />
-                            <span>{chapter}</span>
-                          </label>
-                        ))}
+                      <div className="form-group">
+                        <label className="form-label">Subject</label>
+                        <select
+                          className="form-input"
+                          value={assignmentSubject}
+                          onChange={(event) => setAssignmentSubject(event.target.value as AssignmentSubject)}
+                        >
+                          {Object.keys(SUBJECT_CHAPTERS).map(subject => (
+                            <option key={subject} value={subject}>
+                              {subject}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                     </div>
-                  )}
+                    <div className="form-group">
+                      <label className="form-label">Chapters</label>
+                      <div className="chapter-mode-row">
+                        <label className="chapter-mode-option">
+                          <input
+                            type="radio"
+                            name="assignment-chapter-mode"
+                            value="all"
+                            checked={assignmentChapterMode === 'all'}
+                            onChange={() => setAssignmentChapterMode('all')}
+                          />
+                          <span>All chapters</span>
+                        </label>
+                        <label className="chapter-mode-option">
+                          <input
+                            type="radio"
+                            name="assignment-chapter-mode"
+                            value="single"
+                            checked={assignmentChapterMode === 'single'}
+                            onChange={() => setAssignmentChapterMode('single')}
+                          />
+                          <span>Single chapter</span>
+                        </label>
+                        <label className="chapter-mode-option">
+                          <input
+                            type="radio"
+                            name="assignment-chapter-mode"
+                            value="multiple"
+                            checked={assignmentChapterMode === 'multiple'}
+                            onChange={() => setAssignmentChapterMode('multiple')}
+                          />
+                          <span>Multiple chapters</span>
+                        </label>
+                      </div>
+                      {assignmentChapterMode === 'all' ? (
+                        <div className="config-note">All chapters in {assignmentSubject} will be included.</div>
+                      ) : (
+                        <div className="chapter-selector">
+                          <div className="chapter-search-row">
+                            <input
+                              className="form-input"
+                              value={assignmentChapterSearch}
+                              onChange={(event) => setAssignmentChapterSearch(event.target.value)}
+                              placeholder="Search chapters (type 3+ characters)"
+                            />
+                            <span className="chapter-search-hint">
+                              {assignmentChapterSearch.trim().length < 3
+                                ? 'Type 3+ characters to filter'
+                                : `Matches: ${filteredAssignmentChapters.length}`}
+                            </span>
+                          </div>
+                          <div className="chapter-list">
+                            {filteredAssignmentChapters.map(chapter => (
+                              <label key={chapter} className="chapter-option">
+                                <input
+                                  type={assignmentChapterMode === 'single' ? 'radio' : 'checkbox'}
+                                  name="assignment-chapter"
+                                  checked={assignmentSelectedChapters.includes(chapter)}
+                                  onChange={() => {
+                                    if (assignmentChapterMode === 'single') {
+                                      setAssignmentSelectedChapters([chapter]);
+                                    } else {
+                                      setAssignmentSelectedChapters(prev =>
+                                        prev.includes(chapter) ? prev.filter(item => item !== chapter) : [...prev, chapter]
+                                      );
+                                    }
+                                  }}
+                                />
+                                <span>{chapter}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label className="form-label">MCQ count</label>
+                        <input
+                          className="form-input"
+                          type="number"
+                          min={0}
+                          value={assignmentMcqCount}
+                          onChange={(event) => setAssignmentMcqCount(Number(event.target.value))}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">NAT count</label>
+                        <input
+                          className="form-input"
+                          type="number"
+                          min={0}
+                          value={assignmentNatCount}
+                          onChange={(event) => setAssignmentNatCount(Number(event.target.value))}
+                        />
+                      </div>
+                    </div>
+                    {assignmentQuestionMismatch && (
+                      <div className="config-warning">MCQ + NAT counts should match total questions.</div>
+                    )}
+                    <div className="form-group">
+                      <label className="form-label">Difficulty</label>
+                      <select
+                        className="form-input"
+                        value={assignmentDifficulty}
+                        onChange={(event) => setAssignmentDifficulty(event.target.value as DifficultyChoice)}
+                      >
+                        <option value="mixed">Mixed (easy/medium/hard)</option>
+                        <option value="easy">Easy</option>
+                        <option value="medium">Medium</option>
+                        <option value="hard">Hard</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+                {previewQuestions.length > 0 && (
+                  <div className="custom-test-preview">
+                    <div className="preview-header">
+                      <h3>Preview Questions</h3>
+                      <button className="btn btn-secondary btn-small" onClick={handleRegeneratePreview} disabled={previewLoading || previewSelected.size === 0}>
+                        <RefreshCw size={14} />
+                        Regenerate Selected
+                      </button>
+                    </div>
+                    <div className="preview-list">
+                      {previewQuestions.map((question, index) => (
+                        <label key={index} className="preview-item">
+                          <input
+                            type="checkbox"
+                            checked={previewSelected.has(index)}
+                            onChange={() => {
+                              setPreviewSelected(prev => {
+                                const next = new Set(prev);
+                                if (next.has(index)) next.delete(index);
+                                else next.add(index);
+                                return next;
+                              });
+                            }}
+                          />
+                          <div>
+                            <div className="preview-title">Q{index + 1} • {question.type}</div>
+                            <div className="preview-question" dangerouslySetInnerHTML={{ __html: renderLatexInHtml(question.question) }} />
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="modal-actions">
+                  <button className="btn btn-secondary" onClick={() => setShowCustomTestPanel(false)} disabled={creatingCustomTest || previewLoading}>
+                    Cancel
+                  </button>
+                  <button className="btn btn-secondary" onClick={handlePreviewCustomTest} disabled={previewLoading}>
+                    {previewLoading ? 'Previewing...' : 'Preview'}
+                  </button>
+                  <button className="btn btn-primary" onClick={handleSavePreviewTest} disabled={creatingCustomTest || previewQuestions.length === 0}>
+                    {creatingCustomTest ? 'Saving...' : 'Save Test'}
+                  </button>
                 </div>
+              </>
+            ) : (
+              <>
                 <div className="form-row">
                   <div className="form-group">
-                    <label className="form-label">MCQ count</label>
+                    <label className="form-label">Test name</label>
                     <input
                       className="form-input"
-                      type="number"
-                      min={0}
-                      value={assignmentMcqCount}
-                      onChange={(event) => setAssignmentMcqCount(Number(event.target.value))}
+                      value={customTestName}
+                      onChange={(event) => setCustomTestName(event.target.value)}
+                      placeholder="e.g. My Practice Set"
                     />
                   </div>
                   <div className="form-group">
-                    <label className="form-label">NAT count</label>
+                    <label className="form-label">Time limit (minutes)</label>
                     <input
                       className="form-input"
                       type="number"
-                      min={0}
-                      value={assignmentNatCount}
-                      onChange={(event) => setAssignmentNatCount(Number(event.target.value))}
+                      min={10}
+                      max={300}
+                      value={customTestTimeLimit}
+                      onChange={(event) => setCustomTestTimeLimit(Number(event.target.value))}
                     />
                   </div>
                 </div>
-                {assignmentQuestionMismatch && (
-                  <div className="config-warning">MCQ + NAT counts should match total questions.</div>
-                )}
                 <div className="form-group">
-                  <label className="form-label">Difficulty</label>
-                  <select
+                  <label className="form-label">Manual questions (JSON)</label>
+                  <textarea
                     className="form-input"
-                    value={assignmentDifficulty}
-                    onChange={(event) => setAssignmentDifficulty(event.target.value as DifficultyChoice)}
-                  >
-                    <option value="mixed">Mixed (easy/medium/hard)</option>
-                    <option value="easy">Easy</option>
-                    <option value="medium">Medium</option>
-                    <option value="hard">Hard</option>
-                  </select>
+                    rows={8}
+                    placeholder='[{"type":"MCQ","question":"...","options":["A","B","C","D"],"answer":"A"}]'
+                    value={manualTestJson}
+                    onChange={(event) => setManualTestJson(event.target.value)}
+                  />
+                  {manualTestError && <div className="form-error">{manualTestError}</div>}
+                  <div className="config-note">Manual tests are shared with everyone. AI generation is disabled for non-owners.</div>
                 </div>
-              </div>
+                <div className="modal-actions">
+                  <button className="btn btn-secondary" onClick={() => setShowCustomTestPanel(false)} disabled={creatingCustomTest}>
+                    Cancel
+                  </button>
+                  <button className="btn btn-primary" onClick={handleCreateManualTest} disabled={creatingCustomTest}>
+                    {creatingCustomTest ? 'Sharing...' : 'Share Test'}
+                  </button>
+                </div>
+              </>
             )}
-            <div className="custom-test-log">
-              <div className="custom-test-log-header">
-                <span>Creation Log</span>
-                {creatingCustomTest && <span className="custom-test-log-status">Working...</span>}
-              </div>
-              <div className="custom-test-log-body">
-                {customTestLogs.length === 0 ? (
-                  <div className="custom-test-log-empty">Log entries will appear here while the test is generated.</div>
-                ) : (
-                  <ul>
-                    {customTestLogs.map((log, index) => (
-                      <li key={`${log.timestamp}-${index}`} className={`custom-test-log-item ${log.level}`}>
-                        <span className="custom-test-log-time">
-                          {new Date(log.timestamp).toLocaleTimeString()}
-                        </span>
-                        <span className="custom-test-log-message">{log.message}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-            <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => setShowCustomTestPanel(false)}>
-                Cancel
-              </button>
-              <button className="btn btn-primary" onClick={handleCreateCustomTest} disabled={creatingCustomTest}>
-                {creatingCustomTest ? 'Creating...' : 'Create Test'}
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -8052,7 +8436,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
         <div className="empty-state">
           <FileText size={36} />
           <div className="empty-state-title">No Custom Tests Yet</div>
-          <div className="empty-state-text">Custom tests created by the owner will appear here.</div>
+          <div className="empty-state-text">Custom tests created by owners or shared by users will appear here.</div>
         </div>
       ) : (
         <div className="custom-tests-grid">
@@ -8063,6 +8447,8 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
               onStart={() => setCustomExamTestId(test.id)}
               onResume={() => setCustomExamTestId(test.id)}
               onViewResults={() => test.attempt && setCustomResultsAttemptId(test.attempt.id)}
+              onDelete={() => handleDeleteCustomTest(test.id)}
+              canDelete={isOwnerUser}
             />
           ))}
         </div>
@@ -8084,6 +8470,11 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
                   ? `Linked to ${user.z7iEnrollment} | ${tests.length} tests synced`
                   : 'Link your Z7I account to view your test results'}
               </p>
+              {user.streakCount ? (
+                <div className="streak-badge">
+                  <span>🔥 {user.streakCount}-day streak</span>
+                </div>
+              ) : null}
             </div>
             <div className="page-header-actions">
               {isOwnerUser && (
@@ -8102,6 +8493,18 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
                 >
                   <Sparkles size={16} />
                   Custom Test
+                </button>
+              )}
+              {!isOwnerUser && (
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setCustomTestLogs([]);
+                    setShowCustomTestPanel(prev => !prev);
+                  }}
+                >
+                  <Sparkles size={16} />
+                  Share Test
                 </button>
               )}
               <button className="btn btn-secondary" onClick={() => setShowForum(true)}>
@@ -8244,6 +8647,39 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
                     </div>
                   </div>
                 </div>
+              </section>
+              <section className="topic-mastery">
+                <div className="topic-mastery-header">
+                  <div>
+                    <h2>Topic Mastery</h2>
+                    <p>Accuracy breakdown by subject from all your attempts.</p>
+                  </div>
+                  <button className="btn btn-secondary btn-small" onClick={loadTopicMastery} disabled={loadingTopicMastery}>
+                    <RefreshCw size={14} className={loadingTopicMastery ? 'spinning' : ''} />
+                    Refresh
+                  </button>
+                </div>
+                {loadingTopicMastery ? (
+                  <div className="topic-mastery-loading">
+                    <span className="spinner" />
+                  </div>
+                ) : topicMastery.length === 0 ? (
+                  <div className="topic-mastery-empty">No mastery data yet. Finish a test to see your breakdown.</div>
+                ) : (
+                  <div className="topic-mastery-grid">
+                    {topicMastery.map(subject => (
+                      <div key={subject.name} className="topic-mastery-card">
+                        <div className="topic-mastery-title">{subject.name}</div>
+                        <div className="topic-mastery-accuracy">{subject.accuracy}%</div>
+                        <div className="topic-mastery-stats">
+                          <span className="correct">✔ {subject.correct}</span>
+                          <span className="incorrect">✖ {subject.incorrect}</span>
+                          <span className="unattempted">— {subject.unattempted}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </section>
               {testsWithoutQuestions.length > 0 && (
                 <section className="zero-question-tests">

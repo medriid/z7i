@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from './lib/prisma.js';
 import { hashPassword, verifyPassword, generateToken, verifyToken, encryptZ7iPassword, decryptZ7iPassword } from './lib/auth.js';
 import { z7iLogin } from './lib/z7i-service.js';
-import { generateCustomTestQuestions } from './lib/ai-service.js';
+import { generateCustomTestQuestions, validateCustomTestQuestion } from './lib/ai-service.js';
 
 const HEX_COLOR_REGEX = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 function setCorsHeaders(res: VercelResponse) {
@@ -24,6 +24,31 @@ async function isAdmin(userId: string): Promise<boolean> {
     select: { isOwner: true }
   });
   return Boolean(user?.isOwner);
+}
+
+async function updateDailyStreak(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { streakCount: true, lastStreakAt: true },
+  });
+  if (!user) return null;
+  const now = new Date();
+  const last = user.lastStreakAt;
+  const todayKey = now.toISOString().slice(0, 10);
+  const lastKey = last ? last.toISOString().slice(0, 10) : null;
+  if (lastKey === todayKey) {
+    return { streakCount: user.streakCount, lastStreakAt: user.lastStreakAt };
+  }
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const yesterdayKey = yesterday.toISOString().slice(0, 10);
+  const nextStreak = lastKey === yesterdayKey ? user.streakCount + 1 : 1;
+  const updated = await prisma.user.update({
+    where: { id: userId },
+    data: { streakCount: nextStreak, lastStreakAt: now },
+    select: { streakCount: true, lastStreakAt: true },
+  });
+  return updated;
 }
 
 const MCQ_TYPES = ['MCQ', 'SINGLE'];
@@ -116,6 +141,8 @@ async function handleRegister(req: VercelRequest, res: VercelResponse) {
         name: true,
         createdAt: true,
         isOwner: true,
+        streakCount: true,
+        lastStreakAt: true,
         themeMode: true,
         themeCustomEnabled: true,
         themeAccent: true,
@@ -180,6 +207,8 @@ async function handleLogin(req: VercelRequest, res: VercelResponse) {
         lastSyncAt: user.z7iAccount?.lastSyncAt,
         canUseAiSolutions: user.canUseAiSolutions,
         canAccessAiChatRoom: user.canAccessAiChatRoom,
+        streakCount: user.streakCount,
+        lastStreakAt: user.lastStreakAt,
         themeMode: user.themeMode,
         themeCustomEnabled: user.themeCustomEnabled,
         themeAccent: user.themeAccent,
@@ -628,6 +657,8 @@ async function handleCustomTestsCreate(req: VercelRequest, res: VercelResponse) 
         timeLimit,
         totalQuestions: questions.length,
         status: 'ready',
+        isShared: true,
+        isManual: false,
         createdByUserId: payload.userId,
         questions: {
           create: questions.map((question, index) => ({
@@ -654,6 +685,220 @@ async function handleCustomTestsCreate(req: VercelRequest, res: VercelResponse) 
   } catch (error) {
     console.error('Custom test create error:', error);
     return res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to create test.' });
+  }
+}
+
+type ManualQuestionInput = {
+  subject?: string;
+  chapter?: string;
+  difficulty?: string;
+  type: string;
+  question: string;
+  options?: string[];
+  answer: string;
+  marksPositive?: number;
+  marksNegative?: number;
+};
+
+function normalizeManualQuestion(input: ManualQuestionInput) {
+  return {
+    subject: input.subject || null,
+    chapter: input.chapter || null,
+    difficulty: input.difficulty || null,
+    type: input.type || 'MCQ',
+    question: input.question,
+    options: input.options,
+    answer: input.answer,
+    marksPositive: input.marksPositive ?? 4,
+    marksNegative: input.marksNegative ?? 1,
+  };
+}
+
+async function handleCustomTestsPreview(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+  const userIsAdmin = await isAdmin(payload.userId);
+  if (!userIsAdmin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  const { modelId, prompt } = req.body as { modelId?: string; prompt?: string };
+  if (!modelId || !prompt) {
+    return res.status(400).json({ error: 'Model and prompt are required.' });
+  }
+  try {
+    const { questions, logs } = await generateCustomTestQuestions({ prompt, modelId });
+    return res.status(200).json({ success: true, questions, logs });
+  } catch (error) {
+    console.error('Custom test preview error:', error);
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to preview test.' });
+  }
+}
+
+async function handleCustomTestsRegenerate(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+  const userIsAdmin = await isAdmin(payload.userId);
+  if (!userIsAdmin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  const { modelId, prompt, indices } = req.body as { modelId?: string; prompt?: string; indices?: number[] };
+  if (!modelId || !prompt || !Array.isArray(indices) || indices.length === 0) {
+    return res.status(400).json({ error: 'Model, prompt, and indices are required.' });
+  }
+  try {
+    const { questions } = await generateCustomTestQuestions({ prompt, modelId });
+    const replacements = indices
+      .map(index => ({ index, question: questions[index] }))
+      .filter(item => item.question);
+    return res.status(200).json({ success: true, replacements });
+  } catch (error) {
+    console.error('Custom test regenerate error:', error);
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to regenerate questions.' });
+  }
+}
+
+async function handleCustomTestsSave(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+  const userIsAdmin = await isAdmin(payload.userId);
+  if (!userIsAdmin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  const { name, timeLimit, modelId, prompt, questions } = req.body as {
+    name?: string;
+    timeLimit?: number;
+    modelId?: string;
+    prompt?: string;
+    questions?: ManualQuestionInput[];
+  };
+  if (!name || !timeLimit || !modelId || !prompt || !Array.isArray(questions) || questions.length === 0) {
+    return res.status(400).json({ error: 'Name, time limit, model, prompt, and questions are required.' });
+  }
+  const normalized = questions.map(normalizeManualQuestion);
+  for (const question of normalized) {
+    const validation = validateCustomTestQuestion(question);
+    if (!validation.valid) {
+      return res.status(400).json({ error: validation.reason || 'Question validation failed.' });
+    }
+  }
+  try {
+    const created = await prisma.customTest.create({
+      data: {
+        name,
+        prompt,
+        modelId,
+        timeLimit,
+        totalQuestions: normalized.length,
+        status: 'ready',
+        isShared: true,
+        isManual: false,
+        createdByUserId: payload.userId,
+        questions: {
+          create: normalized.map((question, index) => ({
+            questionOrder: index + 1,
+            subject: question.subject,
+            chapter: question.chapter,
+            difficulty: question.difficulty,
+            questionType: question.type || 'MCQ',
+            questionHtml: question.question,
+            option1: question.options?.[0] || null,
+            option2: question.options?.[1] || null,
+            option3: question.options?.[2] || null,
+            option4: question.options?.[3] || null,
+            correctAnswer: question.answer,
+            marksPositive: question.marksPositive ?? 4,
+            marksNegative: question.marksNegative ?? 1,
+          })),
+        },
+      },
+      select: { id: true, name: true, totalQuestions: true },
+    });
+    return res.status(200).json({ success: true, test: created });
+  } catch (error) {
+    console.error('Custom test save error:', error);
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to save test.' });
+  }
+}
+
+async function handleCustomTestsCreateManual(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+
+  const { name, timeLimit, questions } = req.body as {
+    name?: string;
+    timeLimit?: number;
+    questions?: ManualQuestionInput[];
+  };
+
+  if (!name || !timeLimit || !Array.isArray(questions) || questions.length === 0) {
+    return res.status(400).json({ error: 'Name, time limit, and questions are required.' });
+  }
+
+  const normalized = questions.map(normalizeManualQuestion);
+  for (const question of normalized) {
+    const validation = validateCustomTestQuestion(question);
+    if (!validation.valid) {
+      return res.status(400).json({ error: validation.reason || 'Question validation failed.' });
+    }
+  }
+
+  try {
+    const created = await prisma.customTest.create({
+      data: {
+        name,
+        prompt: 'manual',
+        modelId: 'manual',
+        timeLimit,
+        totalQuestions: normalized.length,
+        status: 'ready',
+        isShared: true,
+        isManual: true,
+        createdByUserId: payload.userId,
+        questions: {
+          create: normalized.map((question, index) => ({
+            questionOrder: index + 1,
+            subject: question.subject,
+            chapter: question.chapter,
+            difficulty: question.difficulty,
+            questionType: question.type || 'MCQ',
+            questionHtml: question.question,
+            option1: question.options?.[0] || null,
+            option2: question.options?.[1] || null,
+            option3: question.options?.[2] || null,
+            option4: question.options?.[3] || null,
+            correctAnswer: question.answer,
+            marksPositive: question.marksPositive ?? 4,
+            marksNegative: question.marksNegative ?? 1,
+          })),
+        },
+      },
+      select: { id: true, name: true, totalQuestions: true },
+    });
+
+    return res.status(200).json({ success: true, test: created });
+  } catch (error) {
+    console.error('Manual custom test create error:', error);
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to create manual test.' });
+  }
+}
+
+async function handleCustomTestsDelete(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+  const userIsAdmin = await isAdmin(payload.userId);
+  if (!userIsAdmin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  const { testId } = req.body as { testId?: string };
+  if (!testId) {
+    return res.status(400).json({ error: 'Test ID is required.' });
+  }
+  try {
+    await prisma.customTest.delete({ where: { id: testId } });
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Custom test delete error:', error);
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to delete test.' });
   }
 }
 
@@ -690,6 +935,8 @@ async function handleCustomTestsList(req: VercelRequest, res: VercelResponse) {
       timeLimit: test.timeLimit,
       totalQuestions: test.totalQuestions,
       status: test.status,
+      isShared: test.isShared,
+      isManual: test.isManual,
       createdAt: test.createdAt,
       attempt: attempt
         ? {
@@ -916,6 +1163,8 @@ async function handleCustomTestsSubmit(req: VercelRequest, res: VercelResponse) 
     })
   ]);
 
+  await updateDailyStreak(payload.userId);
+
   return res.status(200).json({
     success: true,
     results: {
@@ -963,6 +1212,18 @@ async function handleCustomTestsAttempt(req: VercelRequest, res: VercelResponse)
     questions: attempt.test.questions,
     responses: attempt.responses,
   });
+}
+
+async function handleStreak(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+  try {
+    const updated = await updateDailyStreak(payload.userId);
+    return res.status(200).json({ success: true, streak: updated });
+  } catch (error) {
+    console.error('Streak update error:', error);
+    return res.status(500).json({ error: 'Failed to update streak' });
+  }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -1017,6 +1278,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     case 'custom-tests-attempt':
       if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
       return handleCustomTestsAttempt(req, res);
+    case 'custom-tests-preview':
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      return handleCustomTestsPreview(req, res);
+    case 'custom-tests-regenerate':
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      return handleCustomTestsRegenerate(req, res);
+    case 'custom-tests-save':
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      return handleCustomTestsSave(req, res);
+    case 'custom-tests-create-manual':
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      return handleCustomTestsCreateManual(req, res);
+    case 'custom-tests-delete':
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      return handleCustomTestsDelete(req, res);
+    case 'streak':
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      return handleStreak(req, res);
     default:
       return res.status(400).json({ error: 'Invalid action' });
   }

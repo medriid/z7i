@@ -9,7 +9,8 @@ import {
   RotateCcw,
   Send,
   CheckCircle,
-  XCircle
+  XCircle,
+  BookOpen
 } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { renderLatexInHtml } from './utils/latex';
@@ -344,6 +345,7 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
   const [currentIndex, setCurrentIndex] = useState(0);
   const [userAnswers, setUserAnswers] = useState<Map<string, UserAnswer>>(new Map());
   const [isPaused, setIsPaused] = useState(false);
+  const [isStudyMode, setIsStudyMode] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -491,6 +493,12 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [isPaused, examFinished]);
+
+  useEffect(() => {
+    if (isStudyMode) {
+      setIsPaused(true);
+    }
+  }, [isStudyMode]);
 
   useEffect(() => {
     questionStartTime.current = Date.now();
@@ -651,7 +659,7 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
   }
 
   return (
-    <div className="exam-writer">
+    <div className="exam-writer custom-exam">
       <div className="exam-writer-header">
         <button className="btn-back" onClick={handleExit}>
           <ChevronLeft size={18} />
@@ -674,6 +682,14 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
             disabled={examFinished}
           >
             {isPaused ? <Play size={16} /> : <Pause size={16} />}
+          </button>
+          <button
+            className={`btn-study ${isStudyMode ? 'active' : ''}`}
+            onClick={() => setIsStudyMode(prev => !prev)}
+            disabled={examFinished}
+            title="Toggle study mode"
+          >
+            <BookOpen size={16} />
           </button>
         </div>
       </div>
@@ -824,6 +840,17 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
                   </>
                 )}
               </div>
+
+              {isStudyMode && (
+                <div className="study-answer">
+                  <span className="study-label">Correct Answer</span>
+                  <span className="study-value">
+                    {currentQuestion.questionType.toUpperCase().includes('NAT')
+                      ? formatNumericalAnswer(currentQuestion.correctAnswer)
+                      : currentQuestion.correctAnswer}
+                  </span>
+                </div>
+              )}
 
               <div className="question-navigation">
                 <button className="btn-nav prev" onClick={handlePrev} disabled={currentIndex === 0}>
