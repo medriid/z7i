@@ -328,10 +328,6 @@ function SubmissionOverlay({
       { name: 'Unattempted', value: results.unattempted, color: 'var(--unattempted)' },
     ].filter(d => d.value > 0);
   }, [results]);
-  const animationKey = results
-    ? `${results.correct}-${results.incorrect}-${results.unattempted}`
-    : 'empty';
-
   return (
     <div className="submission-overlay">
       <div className="submission-modal">
@@ -382,7 +378,6 @@ function SubmissionOverlay({
                 <ResponsiveContainer width={140} height={140}>
                   <PieChart>
                     <Pie
-                      key={animationKey}
                       data={pieData}
                       cx="50%"
                       cy="50%"
@@ -390,9 +385,8 @@ function SubmissionOverlay({
                       outerRadius={65}
                       dataKey="value"
                       strokeWidth={0}
-                      isAnimationActive
-                      animationDuration={650}
-                      animationEasing="ease-out"
+                      animationBegin={0}
+                      animationDuration={1000}
                     >
                       {pieData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
