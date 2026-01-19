@@ -26,6 +26,8 @@ model User {
   canUseAiSolutions   Boolean   @default(false) // Permission to use AI solutions
   canAccessAiChatRoom Boolean   @default(true) // Permission to access AI chatroom
   isOwner             Boolean   @default(false)
+  streakCount         Int       @default(0)
+  lastStreakAt        DateTime?
   
   z7iAccount    Z7iAccount?
   
@@ -36,6 +38,7 @@ model User {
 
   customTestsCreated CustomTest[] @relation("CustomTestsCreated")
   customTestAttempts CustomTestAttempt[]
+  bookmarkGroups   BookmarkGroup[]
 }
 
 model Session {
@@ -227,10 +230,24 @@ model QuestionBookmark {
   userId          String
   questionId      String
   question        QuestionResponse @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  groupId         String?
+  group           BookmarkGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
   
   createdAt       DateTime  @default(now())
   
   @@unique([userId, questionId])
+}
+
+model BookmarkGroup {
+  id        String  @id @default(cuid())
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime @default(now())
+
+  bookmarks QuestionBookmark[]
+
+  @@unique([userId, name])
 }
 
 model QuestionNote {
@@ -255,6 +272,8 @@ model CustomTest {
   timeLimit       Int       // in minutes
   totalQuestions  Int
   status          String    @default("ready") // ready, generating, failed
+  isShared        Boolean   @default(false)
+  isManual        Boolean   @default(false)
   createdByUserId String?
   createdByUser   User?     @relation("CustomTestsCreated", fields: [createdByUserId], references: [id], onDelete: SetNull)
   createdAt       DateTime  @default(now())

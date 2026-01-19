@@ -105,7 +105,7 @@ export function isGeminiConfigured(): boolean {
   return getGeminiApiKeys().length > 0;
 }
 
-const DEFAULT_HF_MODEL = 'imagepipeline/flux_uncensored_nsfw_v2';
+const DEFAULT_HF_MODEL = 'stabilityai/stable-diffusion-xl-base-1.0';
 
 function getHuggingFaceTokens(): string[] {
   const tokens: string[] = [];
@@ -281,7 +281,7 @@ export async function generateHuggingFaceImage({
   const hf = new InferenceClient(token);
   try {
     const imageBlob = await hf.textToImage({
-      provider: 'fal-ai',
+      provider: 'hf-inference',
       model: modelName,
       inputs: prompt,
       parameters: {
@@ -484,6 +484,53 @@ function extractImageUrls(html: string | null | undefined): string[] {
   return urls;
 }
 
+function normalizeLineBreaks(html: string): string {
+  const normalized = html.replace(/<br\s*\/?>/gi, '\n');
+  const lines = normalized
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+  if (lines.length >= 4 && lines.every(line => line.length <= 4 && !line.includes('<'))) {
+    return lines.join(' ');
+  }
+  const output: string[] = [];
+  let buffer = '';
+  for (const line of lines) {
+    if (/^[A-Za-z0-9]$/.test(line)) {
+      buffer += line;
+      continue;
+    }
+    if (buffer) {
+      output.push(buffer);
+      buffer = '';
+    }
+    output.push(line);
+  }
+  if (buffer) {
+    output.push(buffer);
+  }
+  return output.join('<br/>');
+}
+
+function normalizeQuestionHtml(html?: string | null): string | null {
+  if (!html) return html ?? null;
+  const trimmed = html.trim();
+  if (!trimmed) return html;
+  return normalizeLineBreaks(trimmed);
+}
+
+function buildDiagramPrompt(question: CustomTestGeneratedQuestion): string {
+  const baseText = stripHtml(question.question || '');
+  const subject = question.subject ? `Subject: ${question.subject}. ` : '';
+  const chapter = question.chapter ? `Chapter: ${question.chapter}. ` : '';
+  return [
+    'Create a clean textbook-style study diagram.',
+    'Use simple lines, clear labels, and a white background.',
+    'No people, no decorative elements, no color gradients.',
+    `${subject}${chapter}Diagram should match: ${baseText}`.trim(),
+  ].join(' ');
+}
+
 async function fetchImageInlineData(url: string): Promise<{ inline_data: { mime_type: string; data: string } } | null> {
   try {
     const resp = await fetch(url);
@@ -549,6 +596,33 @@ export type CustomTestGeneratedQuestion = {
   marksPositive?: number;
   marksNegative?: number;
 };
+
+type ValidationResult = { valid: boolean; reason?: string };
+
+export function validateCustomTestQuestion(question: CustomTestGeneratedQuestion): ValidationResult {
+  const trimmedQuestion = (question.question || '').trim();
+  if (trimmedQuestion.length < 12) {
+    return { valid: false, reason: 'Question text too short.' };
+  }
+  const type = (question.type || '').toUpperCase();
+  if (type === 'MCQ') {
+    if (!question.options || question.options.length !== 4) {
+      return { valid: false, reason: 'MCQ must include 4 options.' };
+    }
+    const answer = (question.answer || '').trim().toUpperCase();
+    if (!['A', 'B', 'C', 'D'].includes(answer)) {
+      return { valid: false, reason: 'MCQ answer must be A, B, C, or D.' };
+    }
+    if (question.options.some(option => (option || '').trim().length === 0)) {
+      return { valid: false, reason: 'MCQ options cannot be empty.' };
+    }
+  } else if (type === 'NAT') {
+    if (!question.answer || Number.isNaN(Number(question.answer))) {
+      return { valid: false, reason: 'NAT answer must be numeric.' };
+    }
+  }
+  return { valid: true };
+}
 
 type CustomTestQuestionOutline = {
   subject?: string;
@@ -1043,6 +1117,10 @@ ${prompt}
         } else {
           delete parsed.options;
         }
+        const validation = validateCustomTestQuestion(parsed);
+        if (!validation.valid) {
+          throw new Error(validation.reason || 'Question validation failed.');
+        }
         return parsed;
       } catch (error) {
         lastError = error as Error;
@@ -1054,9 +1132,43 @@ ${prompt}
 
   addLog(`Starting custom test generation (model preference: ${modelId}).`);
   const outline = await generateOutline();
+  const shouldGenerateDiagrams = isHuggingFaceConfigured() && isBlobConfigured();
+  const diagramIndexes = new Set<number>();
+  let diagramGenerationEnabled = shouldGenerateDiagrams;
+  let diagramFailureStreak = 0;
+  if (shouldGenerateDiagrams) {
+    const diagramCount = Math.max(1, Math.round(outline.length / 4));
+    const step = outline.length / diagramCount;
+    for (let i = 0; i < diagramCount; i += 1) {
+      diagramIndexes.add(Math.floor(i * step));
+    }
+    addLog(`Diagram generation enabled for ${diagramIndexes.size} question(s).`);
+  } else {
+    addLog('Diagram generation skipped (Hugging Face or blob storage not configured).');
+  }
   const questions: CustomTestGeneratedQuestion[] = [];
   for (let i = 0; i < outline.length; i += 1) {
     const question = await generateQuestion(outline[i], i);
+    question.question = normalizeQuestionHtml(question.question) || question.question;
+    if (question.options) {
+      question.options = question.options.map(option => normalizeQuestionHtml(option) || option);
+    }
+    if (diagramGenerationEnabled && diagramIndexes.has(i)) {
+      try {
+        const diagramPrompt = buildDiagramPrompt(question);
+        const diagram = await generateHuggingFaceImage({ prompt: diagramPrompt });
+        question.question = `${question.question}<figure class="question-diagram"><img src="${diagram.url}" alt="Study diagram" /><figcaption>Diagram</figcaption></figure>`;
+        addLog(`Added diagram to Q${i + 1} using ${diagram.modelUsed}.`);
+        diagramFailureStreak = 0;
+      } catch (error) {
+        diagramFailureStreak += 1;
+        addLog(`Diagram generation failed for Q${i + 1}: ${(error as Error).message}`);
+        if (diagramFailureStreak >= 2) {
+          diagramGenerationEnabled = false;
+          addLog('Diagram generation disabled after repeated failures.');
+        }
+      }
+    }
     questions.push(question);
   }
   addLog('All questions generated.');
