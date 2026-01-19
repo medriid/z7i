@@ -1806,28 +1806,33 @@ function Navigation({
 }
 
 function MiniPieChart({ correct, incorrect, unattempted }: { correct: number; incorrect: number; unattempted: number }) {
-  let data = [
-    { name: 'Correct', value: correct, color: 'var(--success)' },
-    { name: 'Incorrect', value: incorrect, color: 'var(--error)' },
-    { name: 'Unattempted', value: unattempted, color: 'var(--unattempted)' },
-  ];
-
-  if (correct === 0 && incorrect === 0 && unattempted > 0) {
-    data = [
-      { name: 'Unattempted', value: 1, color: 'var(--unattempted)' },
+  const data = useMemo(() => {
+    let chartData = [
+      { name: 'Correct', value: correct, color: 'var(--success)' },
+      { name: 'Incorrect', value: incorrect, color: 'var(--error)' },
+      { name: 'Unattempted', value: unattempted, color: 'var(--unattempted)' },
     ];
-  } else {
-    data = data.filter(d => d.value > 0);
-  }
+
+    if (correct === 0 && incorrect === 0 && unattempted > 0) {
+      chartData = [
+        { name: 'Unattempted', value: 1, color: 'var(--unattempted)' },
+      ];
+    } else {
+      chartData = chartData.filter(d => d.value > 0);
+    }
+
+    return chartData;
+  }, [correct, incorrect, unattempted]);
 
   const accuracy = correct + incorrect > 0 ? Math.round((correct / (correct + incorrect)) * 100) : 0;
-  const animationId = `${correct}-${incorrect}-${unattempted}`;
+  const animationKey = `${correct}-${incorrect}-${unattempted}`;
 
   return (
     <div className="mini-pie-container">
       <ResponsiveContainer width={52} height={52}>
         <PieChart>
           <Pie
+            key={animationKey}
             data={data}
             cx="50%"
             cy="50%"
@@ -1838,7 +1843,6 @@ function MiniPieChart({ correct, incorrect, unattempted }: { correct: number; in
             isAnimationActive
             animationDuration={450}
             animationEasing="ease-out"
-            animationId={animationId}
           >
             {data.map((entry, index) => (
               <Cell key={`cell-${index}`} fill={entry.color} />
@@ -8848,7 +8852,7 @@ function ThemeProvider({
 
   const toggleTheme = async () => {
     const previousTheme = theme;
-    const nextTheme = theme === 'dark' ? 'light' : 'dark';
+    const nextTheme: Theme = theme === 'dark' ? 'light' : 'dark';
     setTheme(nextTheme);
 
     if (!user || !onUserUpdate) {
