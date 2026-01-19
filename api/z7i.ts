@@ -1238,10 +1238,19 @@ async function handleBookmark(req: VercelRequest, res: VercelResponse) {
   const payload = getAuth(req);
   if (!payload) return res.status(401).json({ error: 'No token provided' });
 
-  const { questionId } = req.body;
+  const { questionId, groupId } = req.body;
   if (!questionId) return res.status(400).json({ error: 'Question ID is required' });
 
   try {
+    if (groupId) {
+      const group = await prisma.bookmarkGroup.findFirst({
+        where: { id: groupId, userId: payload.userId },
+        select: { id: true },
+      });
+      if (!group) {
+        return res.status(400).json({ error: 'Invalid bookmark group.' });
+      }
+    }
     const existing = await prisma.questionBookmark.findUnique({
       where: { userId_questionId: { userId: payload.userId, questionId } }
     });
@@ -1253,7 +1262,7 @@ async function handleBookmark(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ success: true, bookmarked: false });
     } else {
       await prisma.questionBookmark.create({
-        data: { userId: payload.userId, questionId }
+        data: { userId: payload.userId, questionId, groupId: groupId || null }
       });
       return res.status(200).json({ success: true, bookmarked: true });
     }
@@ -1271,6 +1280,7 @@ async function handleGetBookmarks(req: VercelRequest, res: VercelResponse) {
     const bookmarks = await prisma.questionBookmark.findMany({
       where: { userId: payload.userId },
       include: {
+        group: true,
         question: {
           include: {
             attempt: {
@@ -1287,6 +1297,8 @@ async function handleGetBookmarks(req: VercelRequest, res: VercelResponse) {
     const formattedBookmarks = bookmarks.map(b => ({
       id: b.id,
       questionId: b.questionId,
+      groupId: b.groupId,
+      groupName: b.group?.name || null,
       createdAt: b.createdAt,
       question: {
         id: b.question.id,
@@ -1322,6 +1334,135 @@ async function handleGetBookmarks(req: VercelRequest, res: VercelResponse) {
   } catch (error) {
     console.error('Get bookmarks error:', error);
     return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+async function handleBookmarkGroups(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+
+  try {
+    const groups = await prisma.bookmarkGroup.findMany({
+      where: { userId: payload.userId },
+      orderBy: { createdAt: 'asc' },
+    });
+    return res.status(200).json({ success: true, groups });
+  } catch (error) {
+    console.error('Get bookmark groups error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+async function handleBookmarkGroupCreate(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+  const { name } = req.body as { name?: string };
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Group name is required' });
+  }
+  try {
+    const group = await prisma.bookmarkGroup.create({
+      data: { userId: payload.userId, name: name.trim() },
+    });
+    return res.status(200).json({ success: true, group });
+  } catch (error) {
+    console.error('Create bookmark group error:', error);
+    return res.status(500).json({ error: 'Failed to create group' });
+  }
+}
+
+async function handleBookmarkGroupDelete(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+  const { groupId } = req.body as { groupId?: string };
+  if (!groupId) {
+    return res.status(400).json({ error: 'Group ID is required' });
+  }
+  try {
+    await prisma.bookmarkGroup.delete({
+      where: { id: groupId },
+    });
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Delete bookmark group error:', error);
+    return res.status(500).json({ error: 'Failed to delete group' });
+  }
+}
+
+async function handleBookmarkGroupAssign(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+  const { questionId, groupId } = req.body as { questionId?: string; groupId?: string | null };
+  if (!questionId) {
+    return res.status(400).json({ error: 'Question ID is required' });
+  }
+  try {
+    if (groupId) {
+      const group = await prisma.bookmarkGroup.findFirst({
+        where: { id: groupId, userId: payload.userId },
+        select: { id: true },
+      });
+      if (!group) {
+        return res.status(400).json({ error: 'Invalid bookmark group.' });
+      }
+    }
+    const existing = await prisma.questionBookmark.findUnique({
+      where: { userId_questionId: { userId: payload.userId, questionId } },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: 'Bookmark not found' });
+    }
+    const updated = await prisma.questionBookmark.update({
+      where: { id: existing.id },
+      data: { groupId: groupId || null },
+    });
+    return res.status(200).json({ success: true, bookmark: updated });
+  } catch (error) {
+    console.error('Assign bookmark group error:', error);
+    return res.status(500).json({ error: 'Failed to assign group' });
+  }
+}
+
+async function handleTopicMastery(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'No token provided' });
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: payload.userId },
+      include: { z7iAccount: true },
+    });
+    if (!user?.z7iAccount) {
+      return res.status(400).json({ error: 'Z7I account not linked' });
+    }
+
+    const stats = await prisma.questionResponse.groupBy({
+      by: ['subjectName', 'answerStatus'],
+      where: { attempt: { z7iAccountId: user.z7iAccount.id } },
+      _count: { id: true },
+    });
+
+    const bySubject = new Map<string, { correct: number; incorrect: number; unattempted: number }>();
+    for (const row of stats) {
+      const key = row.subjectName || 'Unknown';
+      if (!bySubject.has(key)) {
+        bySubject.set(key, { correct: 0, incorrect: 0, unattempted: 0 });
+      }
+      const subject = bySubject.get(key)!;
+      if (row.answerStatus === 'correct') subject.correct += row._count.id;
+      else if (row.answerStatus === 'incorrect') subject.incorrect += row._count.id;
+      else subject.unattempted += row._count.id;
+    }
+
+    const subjects = Array.from(bySubject.entries()).map(([name, values]) => {
+      const total = values.correct + values.incorrect + values.unattempted;
+      const accuracy = total ? Math.round((values.correct / total) * 100) : 0;
+      return { name, total, ...values, accuracy };
+    });
+
+    return res.status(200).json({ success: true, subjects });
+  } catch (error) {
+    console.error('Topic mastery error:', error);
+    return res.status(500).json({ error: 'Failed to load topic mastery' });
   }
 }
 
@@ -3095,6 +3236,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     case 'bookmarks':
       if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
       return handleGetBookmarks(req, res);
+    case 'bookmark-groups':
+      if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+      return handleBookmarkGroups(req, res);
+    case 'bookmark-group-create':
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      return handleBookmarkGroupCreate(req, res);
+    case 'bookmark-group-delete':
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      return handleBookmarkGroupDelete(req, res);
+    case 'bookmark-group-assign':
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      return handleBookmarkGroupAssign(req, res);
     case 'note':
       if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
       return handleNote(req, res);
@@ -3161,6 +3314,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     case 'time-intelligence':
       if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
       return handleTimeIntelligence(req, res);
+    case 'topic-mastery':
+      if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+      return handleTopicMastery(req, res);
     case 'ai-questions':
       if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
       return handleGetQuestionsForAI(req, res);

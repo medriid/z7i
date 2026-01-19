@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   ChevronLeft, ChevronRight, Clock, CheckCircle, XCircle, MinusCircle,
   Flag, Eye, Play, Pause, RotateCcw, Send, Trophy,
-  Sparkles, TrendingUp, Zap, X
+  Sparkles, TrendingUp, Zap, X, BookOpen
 } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 
@@ -454,6 +454,7 @@ export function ExamWriter({ test, onBack, onViewAnalysis }: ExamWriterProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [userAnswers, setUserAnswers] = useState<Map<string, UserAnswer>>(new Map());
   const [isPaused, setIsPaused] = useState(false);
+  const [isStudyMode, setIsStudyMode] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -524,6 +525,12 @@ export function ExamWriter({ test, onBack, onViewAnalysis }: ExamWriterProps) {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [isPaused, examFinished]);
+
+  useEffect(() => {
+    if (isStudyMode) {
+      setIsPaused(true);
+    }
+  }, [isStudyMode]);
 
   useEffect(() => {
     questionStartTime.current = Date.now();
@@ -743,6 +750,14 @@ export function ExamWriter({ test, onBack, onViewAnalysis }: ExamWriterProps) {
           >
             {isPaused ? <Play size={16} /> : <Pause size={16} />}
           </button>
+          <button
+            className={`btn-study ${isStudyMode ? 'active' : ''}`}
+            onClick={() => setIsStudyMode(prev => !prev)}
+            disabled={examFinished}
+            title="Toggle study mode"
+          >
+            <BookOpen size={16} />
+          </button>
         </div>
       </div>
 
@@ -955,6 +970,17 @@ export function ExamWriter({ test, onBack, onViewAnalysis }: ExamWriterProps) {
                   </>
                 )}
               </div>
+
+              {isStudyMode && (
+                <div className="study-answer">
+                  <span className="study-label">Correct Answer</span>
+                  <span className="study-value">
+                    {currentQuestion.type.toUpperCase().includes('NAT')
+                      ? formatNumericalAnswer(currentQuestion.correctAnswer)
+                      : currentQuestion.correctAnswer}
+                  </span>
+                </div>
+              )}
               
               <div className="question-navigation">
                 <button 

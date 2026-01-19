@@ -45,7 +45,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         "lastIpAddress" TEXT,
         "canUseAiSolutions" BOOLEAN NOT NULL DEFAULT FALSE,
         "canAccessAiChatRoom" BOOLEAN NOT NULL DEFAULT TRUE,
-        "isOwner" BOOLEAN NOT NULL DEFAULT FALSE
+        "isOwner" BOOLEAN NOT NULL DEFAULT FALSE,
+        "streakCount" INTEGER NOT NULL DEFAULT 0,
+        "lastStreakAt" TIMESTAMP(3)
       )
     `;
 
@@ -61,6 +63,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await sql`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "themeWarning" TEXT`;
     await sql`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "themeUnattempted" TEXT`;
     await sql`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "isOwner" BOOLEAN NOT NULL DEFAULT FALSE`;
+    await sql`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "streakCount" INTEGER NOT NULL DEFAULT 0`;
+    await sql`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "lastStreakAt" TIMESTAMP(3)`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS "Session" (
@@ -258,10 +262,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     await sql`
+      CREATE TABLE IF NOT EXISTS "BookmarkGroup" (
+        "id" TEXT PRIMARY KEY,
+        "userId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+        "name" TEXT NOT NULL,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE("userId", "name")
+      )
+    `;
+
+    await sql`
       CREATE TABLE IF NOT EXISTS "QuestionBookmark" (
         "id" TEXT PRIMARY KEY,
         "userId" TEXT NOT NULL,
         "questionId" TEXT NOT NULL REFERENCES "QuestionResponse"("id") ON DELETE CASCADE,
+        "groupId" TEXT REFERENCES "BookmarkGroup"("id") ON DELETE SET NULL,
         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE("userId", "questionId")
       )
@@ -443,7 +458,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         "examName" TEXT NOT NULL,
         "year" INTEGER NOT NULL,
         "session" TEXT,
-        "shift" INTEGER,
+        "shift" TEXT,
         "date" TIMESTAMP(3),
         "title" TEXT NOT NULL,
         "description" TEXT,
@@ -541,6 +556,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         "timeLimit" INTEGER NOT NULL,
         "totalQuestions" INTEGER NOT NULL,
         "status" TEXT NOT NULL DEFAULT 'ready',
+        "isShared" BOOLEAN NOT NULL DEFAULT FALSE,
+        "isManual" BOOLEAN NOT NULL DEFAULT FALSE,
         "createdByUserId" TEXT REFERENCES "User"("id") ON DELETE SET NULL,
         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -623,11 +640,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     await sql`ALTER TABLE "PYPAttempt" ADD COLUMN IF NOT EXISTS "topicStats" JSONB`;
     await sql`ALTER TABLE "PYPAttempt" ADD COLUMN IF NOT EXISTS "revisionRecommendations" JSONB`;
+    await sql`ALTER TABLE "QuestionBookmark" ADD COLUMN IF NOT EXISTS "groupId" TEXT`;
+    await sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'QuestionBookmark_groupId_fkey'
+        ) THEN
+          ALTER TABLE "QuestionBookmark"
+            ADD CONSTRAINT "QuestionBookmark_groupId_fkey"
+            FOREIGN KEY ("groupId") REFERENCES "BookmarkGroup"("id") ON DELETE SET NULL;
+        END IF;
+      END $$;
+    `;
+    await sql`ALTER TABLE "CustomTest" ADD COLUMN IF NOT EXISTS "isShared" BOOLEAN NOT NULL DEFAULT FALSE`;
+    await sql`ALTER TABLE "CustomTest" ADD COLUMN IF NOT EXISTS "isManual" BOOLEAN NOT NULL DEFAULT FALSE`;
+    await sql`ALTER TABLE "PastYearPaper" ALTER COLUMN "shift" TYPE TEXT USING "shift"::TEXT`;
 
     return res.status(200).json({ 
       success: true, 
       message: 'Database migrated successfully!',
-      tables: ['User', 'Session', 'AiChatPersonalityConfig', 'AiChatSession', 'AiChatMessage', 'Z7iAccount', 'Package', 'Test', 'TestAttempt', 'QuestionResponse', 'QuestionBookmark', 'QuestionNote', 'QuestionComment', 'BonusQuestion', 'AnswerKeyChange', 'TestRevision', 'RevisionResponse', 'ScoreAdjustment', 'ForumPost', 'ForumReply', 'ForumPostLike', 'ForumReplyLike', 'PastYearPaper', 'PYPQuestion', 'PYPAttempt', 'PYPBookmark', 'PYPNote', 'CustomTest', 'CustomTestQuestion', 'CustomTestAttempt', 'CustomTestResponse']
+      tables: ['User', 'Session', 'AiChatPersonalityConfig', 'AiChatSession', 'AiChatMessage', 'Z7iAccount', 'Package', 'Test', 'TestAttempt', 'QuestionResponse', 'BookmarkGroup', 'QuestionBookmark', 'QuestionNote', 'QuestionComment', 'BonusQuestion', 'AnswerKeyChange', 'TestRevision', 'RevisionResponse', 'ScoreAdjustment', 'ForumPost', 'ForumReply', 'ForumPostLike', 'ForumReplyLike', 'PastYearPaper', 'PYPQuestion', 'PYPAttempt', 'PYPBookmark', 'PYPNote', 'CustomTest', 'CustomTestQuestion', 'CustomTestAttempt', 'CustomTestResponse']
     });
 
   } catch (error) {
