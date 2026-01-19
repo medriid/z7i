@@ -1821,6 +1821,7 @@ function MiniPieChart({ correct, incorrect, unattempted }: { correct: number; in
   }
 
   const accuracy = correct + incorrect > 0 ? Math.round((correct / (correct + incorrect)) * 100) : 0;
+  const animationId = `${correct}-${incorrect}-${unattempted}`;
 
   return (
     <div className="mini-pie-container">
@@ -1834,8 +1835,10 @@ function MiniPieChart({ correct, incorrect, unattempted }: { correct: number; in
             outerRadius={24}
             dataKey="value"
             strokeWidth={0}
-            animationBegin={0}
-            animationDuration={600}
+            isAnimationActive
+            animationDuration={450}
+            animationEasing="ease-out"
+            animationId={animationId}
           >
             {data.map((entry, index) => (
               <Cell key={`cell-${index}`} fill={entry.color} />
@@ -8844,12 +8847,15 @@ function ThemeProvider({
   }, [customThemeEnabled, themeColors, theme]);
 
   const toggleTheme = async () => {
+    const previousTheme = theme;
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
     setTheme(nextTheme);
 
     if (!user || !onUserUpdate) {
       return;
     }
+    const optimisticUser = { ...user, themeMode: nextTheme };
+    onUserUpdate(optimisticUser);
 
     try {
       const response = await apiRequest('/auth?action=update-theme', {
@@ -8858,9 +8864,14 @@ function ThemeProvider({
       });
 
       if (response.success) {
-        onUserUpdate({ ...user, ...response.user });
+        onUserUpdate({ ...optimisticUser, ...response.user, themeMode: nextTheme });
+      } else {
+        setTheme(previousTheme);
+        onUserUpdate({ ...user, themeMode: previousTheme });
       }
     } catch {
+      setTheme(previousTheme);
+      onUserUpdate({ ...user, themeMode: previousTheme });
     }
   };
 

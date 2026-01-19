@@ -5135,9 +5135,9 @@ body {
 }
 
 .custom-exam .exam-writer-header {
-  background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.95));
-  border-bottom: 1px solid rgba(148, 163, 184, 0.25);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.35);
+  background: linear-gradient(135deg, rgba(39, 39, 42, 0.96), rgba(24, 24, 27, 0.96));
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.25);
 }
 
 .custom-exam .exam-title {
@@ -5153,14 +5153,14 @@ body {
 }
 
 .custom-exam .exam-nav-panel {
-  background: linear-gradient(180deg, rgba(30, 41, 59, 0.85), rgba(15, 23, 42, 0.95));
+  background: linear-gradient(180deg, rgba(39, 39, 42, 0.9), rgba(24, 24, 27, 0.97));
   border-radius: var(--radius-xl);
   border-right: none;
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.4);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.28);
 }
 
 .custom-exam .nav-legend {
-  background: rgba(15, 23, 42, 0.7);
+  background: rgba(39, 39, 42, 0.75);
 }
 
 .custom-exam .exam-question-panel {
@@ -5172,10 +5172,30 @@ body {
 }
 
 .custom-exam .question-content {
-  background: linear-gradient(180deg, rgba(15, 23, 42, 0.6), rgba(15, 23, 42, 0.85));
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: linear-gradient(180deg, rgba(39, 39, 42, 0.7), rgba(24, 24, 27, 0.9));
+  border: 1px solid rgba(148, 163, 184, 0.18);
   padding: 1.25rem;
   max-height: 40vh;
+}
+
+[data-theme="light"] .custom-exam .exam-writer-header {
+  background: linear-gradient(135deg, rgba(248, 250, 252, 0.98), rgba(226, 232, 240, 0.96));
+  border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+[data-theme="light"] .custom-exam .exam-nav-panel {
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(226, 232, 240, 0.92));
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+}
+
+[data-theme="light"] .custom-exam .nav-legend {
+  background: rgba(226, 232, 240, 0.8);
+}
+
+[data-theme="light"] .custom-exam .question-content {
+  background: linear-gradient(180deg, rgba(241, 245, 249, 0.95), rgba(226, 232, 240, 0.9));
+  border: 1px solid rgba(148, 163, 184, 0.3);
 }
 
 .custom-exam .question-html {

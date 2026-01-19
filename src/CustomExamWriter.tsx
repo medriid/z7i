@@ -252,6 +252,9 @@ function SubmissionOverlay({
         { name: 'Unattempted', value: results.unattempted, color: 'var(--unattempted)' },
       ].filter(d => d.value > 0)
     : [];
+  const animationId = results
+    ? `${results.correct}-${results.incorrect}-${results.unattempted}`
+    : 'empty';
 
   return (
     <div className="submission-overlay">
@@ -292,7 +295,17 @@ function SubmissionOverlay({
               <div className="score-circle">
                 <ResponsiveContainer width={120} height={120}>
                   <PieChart>
-                    <Pie data={pieData} dataKey="value" innerRadius={40} outerRadius={55} strokeWidth={0}>
+                    <Pie
+                      data={pieData}
+                      dataKey="value"
+                      innerRadius={40}
+                      outerRadius={55}
+                      strokeWidth={0}
+                      isAnimationActive
+                      animationDuration={650}
+                      animationEasing="ease-out"
+                      animationId={animationId}
+                    >
                       {pieData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
