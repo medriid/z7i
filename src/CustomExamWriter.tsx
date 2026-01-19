@@ -245,13 +245,17 @@ function SubmissionOverlay({
 }) {
   if (!isVisible) return null;
 
-  const pieData = results
-    ? [
-        { name: 'Correct', value: results.correct, color: 'var(--success)' },
-        { name: 'Incorrect', value: results.incorrect, color: 'var(--error)' },
-        { name: 'Unattempted', value: results.unattempted, color: 'var(--unattempted)' },
-      ].filter(d => d.value > 0)
-    : [];
+  const pieData = useMemo(() => {
+    if (!results) return [];
+    return [
+      { name: 'Correct', value: results.correct, color: 'var(--success)' },
+      { name: 'Incorrect', value: results.incorrect, color: 'var(--error)' },
+      { name: 'Unattempted', value: results.unattempted, color: 'var(--unattempted)' },
+    ].filter(d => d.value > 0);
+  }, [results]);
+  const animationKey = results
+    ? `${results.correct}-${results.incorrect}-${results.unattempted}`
+    : 'empty';
 
   return (
     <div className="submission-overlay">
@@ -292,7 +296,17 @@ function SubmissionOverlay({
               <div className="score-circle">
                 <ResponsiveContainer width={120} height={120}>
                   <PieChart>
-                    <Pie data={pieData} dataKey="value" innerRadius={40} outerRadius={55} strokeWidth={0}>
+                    <Pie
+                      key={animationKey}
+                      data={pieData}
+                      dataKey="value"
+                      innerRadius={40}
+                      outerRadius={55}
+                      strokeWidth={0}
+                      isAnimationActive
+                      animationDuration={650}
+                      animationEasing="ease-out"
+                    >
                       {pieData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}

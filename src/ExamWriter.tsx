@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   ChevronLeft, ChevronRight, Clock, CheckCircle, XCircle, MinusCircle,
   Flag, Eye, Play, Pause, RotateCcw, Send, Trophy,
@@ -320,11 +320,17 @@ function SubmissionOverlay({
 }) {
   if (!isVisible) return null;
 
-  const pieData = results ? [
-    { name: 'Correct', value: results.correct, color: 'var(--success)' },
-    { name: 'Incorrect', value: results.incorrect, color: 'var(--error)' },
-    { name: 'Unattempted', value: results.unattempted, color: 'var(--unattempted)' },
-  ].filter(d => d.value > 0) : [];
+  const pieData = useMemo(() => {
+    if (!results) return [];
+    return [
+      { name: 'Correct', value: results.correct, color: 'var(--success)' },
+      { name: 'Incorrect', value: results.incorrect, color: 'var(--error)' },
+      { name: 'Unattempted', value: results.unattempted, color: 'var(--unattempted)' },
+    ].filter(d => d.value > 0);
+  }, [results]);
+  const animationKey = results
+    ? `${results.correct}-${results.incorrect}-${results.unattempted}`
+    : 'empty';
 
   return (
     <div className="submission-overlay">
@@ -376,6 +382,7 @@ function SubmissionOverlay({
                 <ResponsiveContainer width={140} height={140}>
                   <PieChart>
                     <Pie
+                      key={animationKey}
                       data={pieData}
                       cx="50%"
                       cy="50%"
@@ -383,8 +390,9 @@ function SubmissionOverlay({
                       outerRadius={65}
                       dataKey="value"
                       strokeWidth={0}
-                      animationBegin={0}
-                      animationDuration={1000}
+                      isAnimationActive
+                      animationDuration={650}
+                      animationEasing="ease-out"
                     >
                       {pieData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
