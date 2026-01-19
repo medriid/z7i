@@ -38,7 +38,7 @@ export async function generateSolutionsBatch(
                 temperature: 0.5,
                 topK: 40,
                 topP: 0.9,
-                maxOutputTokens: 8000,
+                maxOutputTokens: 16000,
               },
               safetySettings: [
                 { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
@@ -741,7 +741,7 @@ export async function generateChatResponse({
       temperature: 0.4,
       topK: 40,
       topP: 0.9,
-      maxOutputTokens: 8192,
+      maxOutputTokens: 16000,
     },
     safetySettings: [
       { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
@@ -956,7 +956,7 @@ Rules:
           modelName: outlineModelName,
           systemPrompt,
           userPrompt: `User prompt:\n${prompt}`,
-          maxOutputTokens: 3500,
+          maxOutputTokens: 16000,
           temperature: 0.3,
         });
         const parsed = parseJsonPayload<{ questions: CustomTestQuestionOutline[] }>(
@@ -1025,7 +1025,7 @@ ${prompt}
           modelName,
           systemPrompt,
           userPrompt,
-          maxOutputTokens: 4000,
+          maxOutputTokens: 160000,
           temperature: 0.35,
         });
         const parsed = parseJsonPayload<CustomTestGeneratedQuestion>(
@@ -1097,7 +1097,7 @@ export async function generateSolution(
               temperature: 0.5,
               topK: 40,
               topP: 0.9,
-              maxOutputTokens: 8000,
+              maxOutputTokens: 160000,
             },
             safetySettings: [
               { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
@@ -1195,7 +1195,7 @@ export async function generateSolution(
               temperature: 0.5,
               topK: 40,
               topP: 0.9,
-              maxOutputTokens: 4000,
+              maxOutputTokens: 160000,
             },
             safetySettings: [
               { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
