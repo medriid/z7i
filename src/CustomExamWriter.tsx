@@ -228,10 +228,12 @@ function SubmissionOverlay({
   isVisible,
   stage,
   results,
+  errorMessage,
   onBack,
+  onDismissError,
 }: {
   isVisible: boolean;
-  stage: 'submitting' | 'calculating' | 'results';
+  stage: 'submitting' | 'calculating' | 'results' | 'error';
   results: {
     correct: number;
     incorrect: number;
@@ -241,7 +243,9 @@ function SubmissionOverlay({
     accuracy: number;
     timeTaken: number;
   } | null;
+  errorMessage?: string | null;
   onBack: () => void;
+  onDismissError?: () => void;
 }) {
   if (!isVisible) return null;
 
@@ -292,7 +296,7 @@ function SubmissionOverlay({
               <div className="score-circle">
                 <ResponsiveContainer width={120} height={120}>
                   <PieChart>
-                    <Pie data={pieData} dataKey="value" innerRadius={40} outerRadius={55} strokeWidth={0}>
+                    <Pie data={pieData} dataKey="value" innerRadius={40} outerRadius={55} strokeWidth={0} isAnimationActive={false}>
                       {pieData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
@@ -332,6 +336,19 @@ function SubmissionOverlay({
             </button>
           </div>
         )}
+
+        {stage === 'error' && (
+          <div className="submission-stage error">
+            <div className="calc-animation">
+              <XCircle size={48} className="calc-icon" />
+            </div>
+            <h2>Submission Failed</h2>
+            <p>{errorMessage || 'We could not submit your test. Please try again.'}</p>
+            <button className="btn btn-secondary" onClick={onDismissError}>
+              Close
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -349,7 +366,8 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
   const [elapsedTime, setElapsedTime] = useState(0);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submissionStage, setSubmissionStage] = useState<'submitting' | 'calculating' | 'results'>('submitting');
+  const [submissionStage, setSubmissionStage] = useState<'submitting' | 'calculating' | 'results' | 'error'>('submitting');
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [examResults, setExamResults] = useState<{
     correct: number;
     incorrect: number;
@@ -569,6 +587,7 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
     if (!attempt) return;
     setShowSubmitConfirm(false);
     setIsSubmitting(true);
+    setSubmissionError(null);
     setSubmissionStage('submitting');
 
     commitTimeForCurrent();
@@ -581,15 +600,22 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
       visited: answer.visited,
     }));
 
-    await apiRequest('/auth?action=custom-tests-save-progress', {
-      method: 'POST',
-      body: JSON.stringify({
-        attemptId: attempt.id,
-        elapsedTime,
-        currentQuestionIndex: currentIndex,
-        responses: payload,
-      }),
-    });
+    try {
+      const saveResponse = await apiRequest('/auth?action=custom-tests-save-progress', {
+        method: 'POST',
+        body: JSON.stringify({
+          attemptId: attempt.id,
+          elapsedTime,
+          currentQuestionIndex: currentIndex,
+          responses: payload,
+        }),
+      });
+      if (!saveResponse?.success) {
+        console.error('Failed to save custom test progress before submit', saveResponse?.error);
+      }
+    } catch (error) {
+      console.error('Failed to save custom test progress before submit', error);
+    }
 
     try {
       const response = await apiRequest('/auth?action=custom-tests-submit', {
@@ -604,9 +630,14 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
         setSubmissionStage('results');
         setExamFinished(true);
         onSubmitted();
+      } else {
+        setSubmissionError(response.error || 'Failed to submit custom test.');
+        setSubmissionStage('error');
       }
     } catch (error) {
       console.error('Failed to submit custom test', error);
+      setSubmissionError('Failed to submit custom test. Please try again.');
+      setSubmissionStage('error');
     } finally {
       setIsSubmitting(false);
     }
@@ -632,6 +663,13 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
       });
     }
     onBack();
+  };
+
+  const isPracticeMode = isStudyMode;
+
+  const handleDismissSubmitError = () => {
+    setSubmissionError(null);
+    setSubmissionStage('submitting');
   };
 
   if (loading) {
@@ -684,10 +722,10 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
             {isPaused ? <Play size={16} /> : <Pause size={16} />}
           </button>
           <button
-            className={`btn-study ${isStudyMode ? 'active' : ''}`}
+            className={`btn-study ${isPracticeMode ? 'active' : ''}`}
             onClick={() => setIsStudyMode(prev => !prev)}
             disabled={examFinished}
-            title="Toggle study mode"
+            title="Toggle practice mode"
           >
             <BookOpen size={16} />
           </button>
@@ -791,7 +829,7 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
                       placeholder="Enter numeric value"
                       step="any"
                     />
-                    {examFinished && currentAnswer?.answer && (
+                    {examFinished && isPracticeMode && currentAnswer?.answer && (
                       <div className="nat-result">
                         {matchesNumericalAnswer(currentAnswer.answer, currentQuestion.correctAnswer) ? (
                           <div className="nat-feedback correct">
@@ -841,7 +879,7 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
                 )}
               </div>
 
-              {isStudyMode && (
+              {isPracticeMode && (
                 <div className="study-answer">
                   <span className="study-label">Correct Answer</span>
                   <span className="study-value">
@@ -901,10 +939,12 @@ export function CustomExamWriter({ testId, onBack, onSubmitted }: CustomExamWrit
       )}
 
       <SubmissionOverlay
-        isVisible={examFinished}
+        isVisible={isSubmitting || submissionStage === 'error' || examFinished}
         stage={submissionStage}
         results={examResults}
+        errorMessage={submissionError}
         onBack={handleExit}
+        onDismissError={handleDismissSubmitError}
       />
     </div>
   );

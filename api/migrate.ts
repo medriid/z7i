@@ -1,6 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { neon } from '@neondatabase/serverless';
 import bcrypt from 'bcryptjs';
+import { prisma } from './lib/prisma.js';
+import { verifyToken } from './lib/auth.js';
 
 const resolveDatabaseUrl = () =>
   process.env.DATABASE_URL ??
@@ -9,10 +11,30 @@ const resolveDatabaseUrl = () =>
   process.env.POSTGRES_URL_NON_POOLING ??
   process.env.NEON_DATABASE_URL;
 
+function getAuth(req: VercelRequest) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  return verifyToken(authHeader.substring(7));
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const payload = getAuth(req);
+  if (!payload) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: payload.userId },
+    select: { isOwner: true },
+  });
+
+  if (!user?.isOwner) {
+    return res.status(403).json({ error: 'Owner access required' });
   }
 
   const databaseUrl = resolveDatabaseUrl();

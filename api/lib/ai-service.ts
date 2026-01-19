@@ -1003,6 +1003,25 @@ export async function generateCustomTestQuestions({
     throw new Error(`${errorMessage}: ${errors[0] || 'Unable to parse JSON.'}`);
   };
 
+  const runWithConcurrency = async <T, R>(
+    items: T[],
+    limit: number,
+    task: (item: T, index: number) => Promise<R>
+  ): Promise<R[]> => {
+    const results: R[] = new Array(items.length);
+    let nextIndex = 0;
+    const workerCount = Math.max(1, Math.min(limit, items.length));
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await task(items[currentIndex], currentIndex);
+      }
+    });
+    await Promise.all(workers);
+    return results;
+  };
+
   const generateOutline = async () => {
     const outlineModelName = modelPreference === 'auto' ? 'gemini-2.5-flash-lite' : modelPreference;
     addLog(`Planning question blueprint with ${outlineModelName}.`);
@@ -1030,6 +1049,7 @@ Rules:
     let lastError: Error | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
+        addLog(`Sending outline instructions (attempt ${attempt + 1}/2).`);
         const text = await callGemini({
           modelName: outlineModelName,
           systemPrompt,
@@ -1099,6 +1119,7 @@ ${prompt}
     let lastError: Error | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
+        addLog(`Sending instructions for Q${index + 1} (attempt ${attempt + 1}/2).`);
         const text = await callGemini({
           modelName,
           systemPrompt,
@@ -1125,6 +1146,7 @@ ${prompt}
         if (!validation.valid) {
           throw new Error(validation.reason || 'Question validation failed.');
         }
+        addLog(`Generated Q${index + 1} successfully.`);
         return parsed;
       } catch (error) {
         lastError = error as Error;
@@ -1139,7 +1161,6 @@ ${prompt}
   const shouldGenerateDiagrams = isHuggingFaceConfigured() && isBlobConfigured();
   const diagramIndexes = new Set<number>();
   let diagramGenerationEnabled = shouldGenerateDiagrams;
-  let diagramFailureStreak = 0;
   if (shouldGenerateDiagrams) {
     const diagramCount = Math.max(1, Math.round(outline.length / 4));
     const step = outline.length / diagramCount;
@@ -1150,30 +1171,30 @@ ${prompt}
   } else {
     addLog('Diagram generation skipped (Hugging Face or blob storage not configured).');
   }
-  const questions: CustomTestGeneratedQuestion[] = [];
-  for (let i = 0; i < outline.length; i += 1) {
-    const question = await generateQuestion(outline[i], i);
+  const questions = await runWithConcurrency(outline, 3, async (item, index) => {
+    const question = await generateQuestion(item, index);
     question.question = normalizeQuestionHtml(question.question) || question.question;
     if (question.options) {
       question.options = question.options.map(option => normalizeQuestionHtml(option) || option);
     }
+    return question;
+  });
+
+  for (let i = 0; i < questions.length; i += 1) {
+    const question = questions[i];
     if (diagramGenerationEnabled && diagramIndexes.has(i)) {
       try {
         const diagramPrompt = buildDiagramPrompt(question);
         const diagram = await generateHuggingFaceImage({ prompt: diagramPrompt });
         question.question = `${question.question}<figure class="question-diagram"><img src="${diagram.url}" alt="Study diagram" /><figcaption>Diagram</figcaption></figure>`;
         addLog(`Added diagram to Q${i + 1} using ${diagram.modelUsed}.`);
-        diagramFailureStreak = 0;
       } catch (error) {
-        diagramFailureStreak += 1;
         addLog(`Diagram generation failed for Q${i + 1}: ${(error as Error).message}`);
-        if (diagramFailureStreak >= 2) {
-          diagramGenerationEnabled = false;
-          addLog('Diagram generation disabled after repeated failures.');
-        }
+        diagramGenerationEnabled = false;
+        diagramIndexes.clear();
+        addLog('Diagram generation disabled after failure. Remaining questions will be text-only.');
       }
     }
-    questions.push(question);
   }
   addLog('All questions generated.');
   return { questions, logs };

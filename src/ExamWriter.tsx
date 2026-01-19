@@ -385,8 +385,7 @@ function SubmissionOverlay({
                       outerRadius={65}
                       dataKey="value"
                       strokeWidth={0}
-                      animationBegin={0}
-                      animationDuration={1000}
+                      isAnimationActive={false}
                     >
                       {pieData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />

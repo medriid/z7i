@@ -137,6 +137,11 @@ interface CustomTestPreviewQuestion {
   marksNegative?: number;
 }
 
+interface CustomTestGenerationLog {
+  timestamp: string;
+  message: string;
+}
+
 type CustomTestConfig = 'jee-main' | 'jee-advanced' | 'assignment';
 type AssignmentSubject = 'Physics' | 'Chemistry' | 'Mathematics';
 type DifficultyChoice = 'mixed' | 'easy' | 'medium' | 'hard';
@@ -1834,8 +1839,7 @@ function MiniPieChart({ correct, incorrect, unattempted }: { correct: number; in
             outerRadius={24}
             dataKey="value"
             strokeWidth={0}
-            animationBegin={0}
-            animationDuration={600}
+            isAnimationActive={false}
           >
             {data.map((entry, index) => (
               <Cell key={`cell-${index}`} fill={entry.color} />
@@ -5047,8 +5051,7 @@ function TestAnalysis({
                     outerRadius={42}
                     dataKey="value"
                     strokeWidth={0}
-                    animationBegin={0}
-                    animationDuration={800}
+                    isAnimationActive={false}
                   >
                     {performanceData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
@@ -7325,6 +7328,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
   const [previewQuestions, setPreviewQuestions] = useState<CustomTestPreviewQuestion[]>([]);
   const [previewSelected, setPreviewSelected] = useState<Set<number>>(new Set());
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewLogs, setPreviewLogs] = useState<CustomTestGenerationLog[]>([]);
   const [manualTestJson, setManualTestJson] = useState('');
   const [manualTestError, setManualTestError] = useState<string | null>(null);
   
@@ -7355,6 +7359,14 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
       setAssignmentSelectedChapters([]);
     }
   }, [assignmentChapterMode]);
+
+  useEffect(() => {
+    if (!showCustomTestPanel) {
+      setPreviewQuestions([]);
+      setPreviewSelected(new Set());
+      setPreviewLogs([]);
+    }
+  }, [showCustomTestPanel]);
   const prepStats = useMemo(() => {
     const totalTests = tests.length;
     const totalQuestions = tests.reduce((acc, test) => acc + test.totalQuestions, 0);
@@ -7535,6 +7547,19 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     setTimeout(() => setCustomTestMessage(null), 4000);
   };
 
+  const formatCustomTestLogTime = (timestamp: string) => {
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return '--:--';
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
+
+  const getCustomTestLogStatus = (message: string) => {
+    const normalized = message.toLowerCase();
+    if (normalized.includes('failed') || normalized.includes('error')) return 'error';
+    if (normalized.includes('success') || normalized.includes('ready')) return 'success';
+    return '';
+  };
+
   const applyCustomTestConfig = (config: CustomTestConfig) => {
     setCustomTestConfig(config);
     if (config === 'jee-main') {
@@ -7578,6 +7603,8 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     const prompt = buildCustomTestPrompt();
     setPreviewLoading(true);
     setPreviewSelected(new Set());
+    setPreviewQuestions([]);
+    setPreviewLogs([{ timestamp: new Date().toISOString(), message: 'Starting preview generation.' }]);
     try {
       const data = await apiRequest('/auth?action=custom-tests-preview', {
         method: 'POST',
@@ -7585,8 +7612,12 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
       });
       if (data.success) {
         setPreviewQuestions(data.questions || []);
+        setPreviewLogs(data.logs || []);
         showCustomMessage('success', 'Preview ready. Select questions to regenerate or save.');
       } else {
+        if (data.logs) {
+          setPreviewLogs(data.logs);
+        }
         showCustomMessage('error', data.error || 'Failed to preview questions.');
       }
     } catch {
@@ -7600,6 +7631,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     if (previewSelected.size === 0) return;
     const prompt = buildCustomTestPrompt();
     setPreviewLoading(true);
+    setPreviewLogs([{ timestamp: new Date().toISOString(), message: 'Regenerating selected questions.' }]);
     try {
       const data = await apiRequest('/auth?action=custom-tests-regenerate', {
         method: 'POST',
@@ -7616,6 +7648,14 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
           return next;
         });
         setPreviewSelected(new Set());
+        if (data.logs) {
+          setPreviewLogs(data.logs);
+        }
+      } else {
+        if (data.logs) {
+          setPreviewLogs(data.logs);
+        }
+        showCustomMessage('error', data.error || 'Failed to regenerate selected questions.');
       }
     } catch {
       showCustomMessage('error', 'Failed to regenerate selected questions.');
@@ -8292,6 +8332,33 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
                           </div>
                         </label>
                       ))}
+                    </div>
+                  </div>
+                )}
+                {(previewLogs.length > 0 || previewLoading) && (
+                  <div className="custom-test-log">
+                    <div className="custom-test-log-header">
+                      <span>Generation Log</span>
+                      <span className="custom-test-log-status">
+                        {previewLoading ? 'Generating...' : `${previewLogs.length} entries`}
+                      </span>
+                    </div>
+                    <div className="custom-test-log-body">
+                      {previewLogs.length > 0 ? (
+                        <ul>
+                          {previewLogs.map((log, index) => {
+                            const status = getCustomTestLogStatus(log.message);
+                            return (
+                              <li key={`${log.timestamp}-${index}`} className={`custom-test-log-item ${status}`}>
+                                <span className="custom-test-log-time">{formatCustomTestLogTime(log.timestamp)}</span>
+                                <span className="custom-test-log-message">{log.message}</span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      ) : (
+                        <div className="custom-test-log-empty">Waiting for logs...</div>
+                      )}
                     </div>
                   </div>
                 )}

@@ -89,6 +89,15 @@ function isMcqType(questionType?: string | null) {
   return MCQ_TYPES.some(type => normalized.includes(type));
 }
 
+function chunkArray<T>(items: T[], size: number): T[][] {
+  if (size <= 0) return [items];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
 type NumericRange = { min: number; max: number };
 
 function parseNumericRanges(value: string): NumericRange[] {
@@ -773,11 +782,11 @@ async function handleCustomTestsRegenerate(req: VercelRequest, res: VercelRespon
     return res.status(400).json({ error: 'Model, prompt, and indices are required.' });
   }
   try {
-    const { questions } = await generateCustomTestQuestions({ prompt, modelId });
+    const { questions, logs } = await generateCustomTestQuestions({ prompt, modelId });
     const replacements = indices
       .map(index => ({ index, question: questions[index] }))
       .filter(item => item.question);
-    return res.status(200).json({ success: true, replacements });
+    return res.status(200).json({ success: true, replacements, logs });
   } catch (error) {
     console.error('Custom test regenerate error:', error);
     return res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to regenerate questions.' });
@@ -1078,34 +1087,38 @@ async function handleCustomTestsSaveProgress(req: VercelRequest, res: VercelResp
     return res.status(400).json({ error: 'Attempt is already submitted.' });
   }
 
-  await prisma.$transaction([
-    prisma.customTestAttempt.update({
-      where: { id: attemptId },
-      data: {
-        timeTaken: typeof elapsedTime === 'number' ? elapsedTime : undefined,
-        currentQuestionIndex: typeof currentQuestionIndex === 'number' ? currentQuestionIndex : undefined,
-      }
-    }),
-    ...responses.map(response =>
-      prisma.customTestResponse.upsert({
-        where: { attemptId_questionId: { attemptId, questionId: response.questionId } },
-        update: {
-          answer: response.answer,
-          flagged: response.flagged,
-          timeSpent: response.timeSpent,
-          visited: response.visited,
-        },
-        create: {
-          attemptId,
-          questionId: response.questionId,
-          answer: response.answer,
-          flagged: response.flagged,
-          timeSpent: response.timeSpent,
-          visited: response.visited,
-        }
-      })
-    )
-  ]);
+  await prisma.customTestAttempt.update({
+    where: { id: attemptId },
+    data: {
+      timeTaken: typeof elapsedTime === 'number' ? elapsedTime : undefined,
+      currentQuestionIndex: typeof currentQuestionIndex === 'number' ? currentQuestionIndex : undefined,
+    }
+  });
+
+  const responseBatches = chunkArray(responses, 25);
+  for (const batch of responseBatches) {
+    await prisma.$transaction(
+      batch.map(response =>
+        prisma.customTestResponse.upsert({
+          where: { attemptId_questionId: { attemptId, questionId: response.questionId } },
+          update: {
+            answer: response.answer,
+            flagged: response.flagged,
+            timeSpent: response.timeSpent,
+            visited: response.visited,
+          },
+          create: {
+            attemptId,
+            questionId: response.questionId,
+            answer: response.answer,
+            flagged: response.flagged,
+            timeSpent: response.timeSpent,
+            visited: response.visited,
+          }
+        })
+      )
+    );
+  }
 
   return res.status(200).json({ success: true });
 }
@@ -1135,54 +1148,58 @@ async function handleCustomTestsSubmit(req: VercelRequest, res: VercelResponse) 
     return res.status(400).json({ error: 'Attempt already submitted.' });
   }
 
-  const responsesByQuestion = new Map(attempt.responses.map(response => [response.questionId, response]));
-  let correct = 0;
-  let incorrect = 0;
-  let score = 0;
-  const maxScore = attempt.test.questions.reduce((acc, question) => acc + question.marksPositive, 0);
+  try {
+    const responsesByQuestion = new Map(attempt.responses.map(response => [response.questionId, response]));
+    let correct = 0;
+    let incorrect = 0;
+    let score = 0;
+    const maxScore = attempt.test.questions.reduce((acc, question) => acc + question.marksPositive, 0);
 
-  const responseUpdates = attempt.test.questions.map(question => {
-    const response = responsesByQuestion.get(question.id);
-    const answer = response?.answer?.trim() ?? '';
-    let answerStatus = 'unattempted';
-    let marksObtained = 0;
+    const responseUpdates = attempt.test.questions.map(question => {
+      const response = responsesByQuestion.get(question.id);
+      const answer = response?.answer?.trim() ?? '';
+      let answerStatus = 'unattempted';
+      let marksObtained = 0;
 
-    if (answer) {
-      const isCorrect = isAnswerMatch(answer, question.correctAnswer, question.questionType);
-      if (isCorrect) {
-        correct += 1;
-        score += question.marksPositive;
-        answerStatus = 'correct';
-        marksObtained = question.marksPositive;
-      } else {
-        incorrect += 1;
-        score -= question.marksNegative;
-        answerStatus = 'incorrect';
-        marksObtained = -question.marksNegative;
+      if (answer) {
+        const isCorrect = isAnswerMatch(answer, question.correctAnswer, question.questionType);
+        if (isCorrect) {
+          correct += 1;
+          score += question.marksPositive;
+          answerStatus = 'correct';
+          marksObtained = question.marksPositive;
+        } else {
+          incorrect += 1;
+          score -= question.marksNegative;
+          answerStatus = 'incorrect';
+          marksObtained = -question.marksNegative;
+        }
       }
+
+      return prisma.customTestResponse.upsert({
+        where: { attemptId_questionId: { attemptId, questionId: question.id } },
+        update: { answerStatus, marksObtained },
+        create: {
+          attemptId,
+          questionId: question.id,
+          answer: answer || null,
+          answerStatus,
+          marksObtained,
+        }
+      });
+    });
+
+    const unattempted = attempt.test.questions.length - correct - incorrect;
+    const accuracy = attempt.test.questions.length
+      ? Math.round((correct / attempt.test.questions.length) * 100)
+      : 0;
+
+    const responseUpdateBatches = chunkArray(responseUpdates, 25);
+    for (const batch of responseUpdateBatches) {
+      await prisma.$transaction(batch);
     }
 
-    return prisma.customTestResponse.upsert({
-      where: { attemptId_questionId: { attemptId, questionId: question.id } },
-      update: { answerStatus, marksObtained },
-      create: {
-        attemptId,
-        questionId: question.id,
-        answer: answer || null,
-        answerStatus,
-        marksObtained,
-      }
-    });
-  });
-
-  const unattempted = attempt.test.questions.length - correct - incorrect;
-  const accuracy = attempt.test.questions.length
-    ? Math.round((correct / attempt.test.questions.length) * 100)
-    : 0;
-
-  await prisma.$transaction([
-    ...responseUpdates,
-    prisma.customTestAttempt.update({
+    await prisma.customTestAttempt.update({
       where: { id: attemptId },
       data: {
         status: 'submitted',
@@ -1195,23 +1212,26 @@ async function handleCustomTestsSubmit(req: VercelRequest, res: VercelResponse) 
         maxScore,
         accuracy,
       }
-    })
-  ]);
+    });
 
-  await updateDailyStreak(payload.userId);
+    await updateDailyStreak(payload.userId);
 
-  return res.status(200).json({
-    success: true,
-    results: {
-      correct,
-      incorrect,
-      unattempted,
-      score,
-      maxScore,
-      accuracy,
-      timeTaken: typeof elapsedTime === 'number' ? elapsedTime : attempt.timeTaken ?? 0,
-    }
-  });
+    return res.status(200).json({
+      success: true,
+      results: {
+        correct,
+        incorrect,
+        unattempted,
+        score,
+        maxScore,
+        accuracy,
+        timeTaken: typeof elapsedTime === 'number' ? elapsedTime : attempt.timeTaken ?? 0,
+      }
+    });
+  } catch (error) {
+    console.error('Custom test submit error:', error);
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to submit custom test.' });
+  }
 }
 
 async function handleCustomTestsAttempt(req: VercelRequest, res: VercelResponse) {
