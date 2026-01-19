@@ -729,9 +729,9 @@ type ManualQuestionInput = {
 
 function normalizeManualQuestion(input: ManualQuestionInput) {
   return {
-    subject: input.subject || null,
-    chapter: input.chapter || null,
-    difficulty: input.difficulty || null,
+    subject: input.subject || undefined,
+    chapter: input.chapter || undefined,
+    difficulty: input.difficulty || undefined,
     type: input.type || 'MCQ',
     question: input.question,
     options: input.options,

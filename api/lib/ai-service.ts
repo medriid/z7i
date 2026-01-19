@@ -578,6 +578,10 @@ export interface ChatMessageInput {
   content: string;
 }
 
+type GeminiContentPart =
+  | { text: string }
+  | { inline_data: { mime_type: string; data: string } };
+
 export interface ChatAttachmentInput {
   name?: string;
   type?: string;
@@ -647,8 +651,8 @@ function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | nul
 
 async function buildChatAttachmentParts(
   attachments: ChatAttachmentInput[]
-): Promise<Array<{ inline_data: { mime_type: string; data: string } }>> {
-  const parts: Array<{ inline_data: { mime_type: string; data: string } }> = [];
+): Promise<GeminiContentPart[]> {
+  const parts: GeminiContentPart[] = [];
   for (const attachment of attachments.slice(0, 4)) {
     if (attachment.dataUrl) {
       const parsed = parseDataUrl(attachment.dataUrl);
@@ -782,7 +786,7 @@ export async function generateChatResponse({
   const modelName = resolveChatModel(modelId);
   const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
 
-  const contents = messages
+  const contents: Array<{ role: 'user' | 'model'; parts: GeminiContentPart[] }> = messages
     .filter(message => message.content.trim())
     .map(message => ({
       role: message.role === 'assistant' ? 'model' : 'user',

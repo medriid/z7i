@@ -1806,33 +1806,27 @@ function Navigation({
 }
 
 function MiniPieChart({ correct, incorrect, unattempted }: { correct: number; incorrect: number; unattempted: number }) {
-  const data = useMemo(() => {
-    let chartData = [
-      { name: 'Correct', value: correct, color: 'var(--success)' },
-      { name: 'Incorrect', value: incorrect, color: 'var(--error)' },
-      { name: 'Unattempted', value: unattempted, color: 'var(--unattempted)' },
+  let data = [
+    { name: 'Correct', value: correct, color: 'var(--success)' },
+    { name: 'Incorrect', value: incorrect, color: 'var(--error)' },
+    { name: 'Unattempted', value: unattempted, color: 'var(--unattempted)' },
+  ];
+
+  if (correct === 0 && incorrect === 0 && unattempted > 0) {
+    data = [
+      { name: 'Unattempted', value: 1, color: 'var(--unattempted)' },
     ];
-
-    if (correct === 0 && incorrect === 0 && unattempted > 0) {
-      chartData = [
-        { name: 'Unattempted', value: 1, color: 'var(--unattempted)' },
-      ];
-    } else {
-      chartData = chartData.filter(d => d.value > 0);
-    }
-
-    return chartData;
-  }, [correct, incorrect, unattempted]);
+  } else {
+    data = data.filter(d => d.value > 0);
+  }
 
   const accuracy = correct + incorrect > 0 ? Math.round((correct / (correct + incorrect)) * 100) : 0;
-  const animationKey = `${correct}-${incorrect}-${unattempted}`;
 
   return (
     <div className="mini-pie-container">
       <ResponsiveContainer width={52} height={52}>
         <PieChart>
           <Pie
-            key={animationKey}
             data={data}
             cx="50%"
             cy="50%"
@@ -1840,9 +1834,8 @@ function MiniPieChart({ correct, incorrect, unattempted }: { correct: number; in
             outerRadius={24}
             dataKey="value"
             strokeWidth={0}
-            isAnimationActive
-            animationDuration={450}
-            animationEasing="ease-out"
+            animationBegin={0}
+            animationDuration={600}
           >
             {data.map((entry, index) => (
               <Cell key={`cell-${index}`} fill={entry.color} />
