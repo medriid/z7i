@@ -9841,7 +9841,7 @@ body {
 
 .clickable-images img:hover {
   transform: scale(1.02);
-  box-shadow: 0 4px 20px rgba(255, 255, 255, 0.1);
+  box-shadow: none;
 }
 
 .lightbox-overlay {
@@ -9927,7 +9927,7 @@ body {
   max-height: 85vh;
   object-fit: contain;
   border-radius: var(--radius-lg);
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  box-shadow: none;
   filter: var(--invert-images);
   background: transparent;
   padding: 0;
@@ -9985,6 +9985,47 @@ body {
   background: var(--accent);
   border-color: transparent;
   color: #fff;
+}
+
+.lightbox-color-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.4rem;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-full);
+}
+
+.lightbox-color-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.lightbox-color-swatch.active {
+  border-color: rgba(255, 255, 255, 0.9);
+}
+
+.lightbox-color-input input[type="color"] {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.lightbox-color-input input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.lightbox-color-input input[type="color"]::-webkit-color-swatch {
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-radius: 999px;
 }
 
 .lightbox-note {
@@ -10125,7 +10166,6 @@ body {
 }
 
 [data-theme="light"] .lightbox-image {
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.2);
   border: 1px solid var(--border-thin);
 }
 

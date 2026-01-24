@@ -1413,6 +1413,7 @@ type DrawingStroke = {
 type SavedQuestionNote = {
   id: string;
   createdAt: string;
+  expiresAt?: string;
   imageSrc: string;
   note: string;
   strokes: DrawingStroke[];
@@ -1423,13 +1424,39 @@ type SavedQuestionNote = {
 };
 
 const SAVED_QUESTION_STORAGE_KEY = 'saved-question-annotations';
+const SAVED_QUESTION_EXPIRY_DAYS = 30;
+const SAVED_QUESTION_EXPIRY_MS = SAVED_QUESTION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
 
 const loadSavedQuestionNotes = (): SavedQuestionNote[] => {
   const raw = localStorage.getItem(SAVED_QUESTION_STORAGE_KEY);
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    const now = Date.now();
+    let didChange = false;
+    const filtered = parsed
+      .map((note) => {
+        if (!note || typeof note !== 'object') return null;
+        const createdAt = typeof note.createdAt === 'string' ? note.createdAt : new Date().toISOString();
+        const expiresAt = typeof note.expiresAt === 'string'
+          ? note.expiresAt
+          : new Date(new Date(createdAt).getTime() + SAVED_QUESTION_EXPIRY_MS).toISOString();
+        if (expiresAt !== note.expiresAt) {
+          didChange = true;
+        }
+        return { ...note, createdAt, expiresAt } as SavedQuestionNote;
+      })
+      .filter((note): note is SavedQuestionNote => {
+        if (!note?.expiresAt) return false;
+        const expiry = Date.parse(note.expiresAt);
+        if (Number.isNaN(expiry)) return false;
+        return expiry > now;
+      });
+    if (didChange || filtered.length !== parsed.length) {
+      saveSavedQuestionNotes(filtered);
+    }
+    return filtered;
   } catch {
     return [];
   }
@@ -1468,11 +1495,16 @@ function ImageLightbox({
   const [drawingEnabled, setDrawingEnabled] = useState(false);
   const [note, setNote] = useState('');
   const [saveStatus, setSaveStatus] = useState('');
+  const [strokeColor, setStrokeColor] = useState('#fbbf24');
   const imageRef = useRef<HTMLImageElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawingRef = useRef(false);
   const currentStrokeRef = useRef<DrawingStroke | null>(null);
   const strokesRef = useRef<DrawingStroke[]>([]);
+  const colorPalette = useMemo(
+    () => ['#fbbf24', '#f97316', '#ef4444', '#f59e0b', '#22c55e', '#14b8a6', '#3b82f6', '#6366f1', '#a855f7', '#ec4899', '#ffffff', '#111827'],
+    [],
+  );
 
   const getAccentColor = useCallback(() => {
     return (
@@ -1481,6 +1513,10 @@ function ImageLightbox({
         .trim() || '#fbbf24'
     );
   }, []);
+
+  useEffect(() => {
+    setStrokeColor(getAccentColor());
+  }, [getAccentColor]);
 
   const drawStrokes = useCallback(() => {
     const canvas = canvasRef.current;
@@ -1542,13 +1578,13 @@ function ImageLightbox({
     };
   }, [onClose, resizeCanvas]);
 
-  const getRelativePoint = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const getRelativePoint = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
     return {
-      x: (event.clientX - rect.left) / rect.width,
-      y: (event.clientY - rect.top) / rect.height,
+      x: (clientX - rect.left) / rect.width,
+      y: (clientY - rect.top) / rect.height,
     };
   };
 
@@ -1558,9 +1594,9 @@ function ImageLightbox({
     const canvas = canvasRef.current;
     canvas?.setPointerCapture(event.pointerId);
     drawingRef.current = true;
-    const point = getRelativePoint(event);
+    const point = getRelativePoint(event.clientX, event.clientY);
     const stroke: DrawingStroke = {
-      color: getAccentColor(),
+      color: strokeColor,
       size: 3,
       points: [point],
     };
@@ -1572,8 +1608,14 @@ function ImageLightbox({
   const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (!drawingEnabled || !drawingRef.current || !currentStrokeRef.current) return;
     event.preventDefault();
-    const point = getRelativePoint(event);
-    currentStrokeRef.current.points.push(point);
+    const nativeEvent = event.nativeEvent;
+    const events = typeof nativeEvent.getCoalescedEvents === 'function'
+      ? nativeEvent.getCoalescedEvents()
+      : [nativeEvent];
+    events.forEach((coalescedEvent) => {
+      const point = getRelativePoint(coalescedEvent.clientX, coalescedEvent.clientY);
+      currentStrokeRef.current?.points.push(point);
+    });
     drawStrokes();
   };
 
@@ -1584,6 +1626,7 @@ function ImageLightbox({
     currentStrokeRef.current = null;
     const canvas = canvasRef.current;
     canvas?.releasePointerCapture(event.pointerId);
+    drawStrokes();
   };
 
   const handleClearDrawing = () => {
@@ -1599,6 +1642,7 @@ function ImageLightbox({
     const entry: SavedQuestionNote = {
       id: createSavedQuestionId(),
       createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + SAVED_QUESTION_EXPIRY_MS).toISOString(),
       imageSrc: src,
       note: note.trim(),
       strokes: strokesRef.current,
@@ -1630,6 +1674,25 @@ function ImageLightbox({
         </button>
         {drawingEnabled && (
           <>
+            <div className="lightbox-color-picker">
+              {colorPalette.map((color) => (
+                <button
+                  key={color}
+                  className={`lightbox-color-swatch ${strokeColor === color ? 'active' : ''}`}
+                  style={{ backgroundColor: color }}
+                  onClick={() => setStrokeColor(color)}
+                  type="button"
+                  aria-label={`Select ${color} stroke`}
+                />
+              ))}
+              <label className="lightbox-color-input" aria-label="Pick a custom color">
+                <input
+                  type="color"
+                  value={strokeColor}
+                  onChange={(event) => setStrokeColor(event.target.value)}
+                />
+              </label>
+            </div>
             <textarea
               className="lightbox-note"
               value={note}
@@ -1664,7 +1727,7 @@ function ImageLightbox({
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
-            onPointerLeave={handlePointerUp}
+            onPointerCancel={handlePointerUp}
           />
         </div>
       </div>
