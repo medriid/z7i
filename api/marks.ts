@@ -259,20 +259,50 @@ async function handleQuestions(req: VercelRequest, res: VercelResponse) {
   return res.status(200).json({ success: true, data });
 }
 
-async function handleExport(res: VercelResponse) {
-  try {
-    const child = spawn('python', ['scripts/getmarks_pyqs.py'], {
+async function spawnExportProcess(command: string) {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(command, ['scripts/getmarks_pyqs.py'], {
       cwd: process.cwd(),
       env: process.env,
       detached: true,
       stdio: 'ignore',
     });
-    child.unref();
-    return res.status(202).json({ success: true, message: 'GetMarks export started' });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return res.status(500).json({ error: 'Failed to start export', details: message });
+    const handleError = (error: Error) => {
+      reject({ error, command });
+    };
+    child.once('error', handleError);
+    child.once('spawn', () => {
+      child.off('error', handleError);
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+async function handleExport(res: VercelResponse) {
+  const commandCandidates = [
+    process.env.PYTHON,
+    process.env.PYTHON_EXECUTABLE,
+    'python3',
+    'python',
+  ].filter((command): command is string => Boolean(command));
+
+  let lastError: Error | null = null;
+  for (const command of commandCandidates) {
+    try {
+      await spawnExportProcess(command);
+      return res.status(202).json({ success: true, message: 'GetMarks export started' });
+    } catch (error) {
+      const details = error as { error?: Error };
+      lastError = details.error ?? (error instanceof Error ? error : null);
+      if (lastError?.message && !lastError.message.includes('ENOENT')) {
+        break;
+      }
+    }
   }
+
+  const message = lastError?.message ?? 'No available Python executable found';
+  return res.status(500).json({ error: 'Failed to start export', details: message });
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
