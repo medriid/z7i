@@ -185,6 +185,21 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
 
+  const highlights = [
+    {
+      title: 'Chapter-wise coverage',
+      description: 'Jump straight into chapters and track question counts instantly.',
+    },
+    {
+      title: 'Clean, focused view',
+      description: 'Distraction-free PYQ practice with consistent formatting.',
+    },
+    {
+      title: 'Local import ready',
+      description: 'Uses your locally scraped data when available for speed.',
+    },
+  ];
+
   const activeCategory = CATEGORY_CONFIG.find((item) => item.key === category) ?? null;
 
   const filteredExams = useMemo(() => {
@@ -351,6 +366,25 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
         <div className="pyp-header-title">
           <h1>Past Year Questions</h1>
           <span className="pyp-paper-count">Browse JEE PYQs by exam, subject, and chapter</span>
+        </div>
+      </div>
+
+      <div className="pyp-hero">
+        <div className="pyp-hero-content">
+          <span className="pyp-hero-badge">PYQ Library • JEE Focused</span>
+          <h2>Find the exact questions you need in minutes.</h2>
+          <p>
+            Move from exam → subject → chapter to unlock precise question sets with clear labels,
+            instant filtering, and smoother navigation.
+          </p>
+        </div>
+        <div className="pyp-hero-cards">
+          {highlights.map((highlight) => (
+            <div key={highlight.title} className="pyp-hero-card">
+              <h3>{highlight.title}</h3>
+              <p>{highlight.description}</p>
+            </div>
+          ))}
         </div>
       </div>
 

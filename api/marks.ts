@@ -1,4 +1,8 @@
 import { spawn } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { gunzip } from 'node:zlib';
+import { promisify } from 'node:util';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const GETMARKS_AUTH_TOKEN =
@@ -14,6 +18,106 @@ const GETMARKS_API = {
   questions: (examId: string, subjectId: string, chapterId: string) =>
     `https://web.getmarks.app/api/v4/cpyqb/exam/${encodeURIComponent(examId)}/subject/${encodeURIComponent(subjectId)}/chapter/${encodeURIComponent(chapterId)}/questions`,
 };
+
+const LOCAL_DATA_DIR = process.env.GETMARKS_DATA_DIR ?? 'getmarks_data';
+const gunzipAsync = promisify(gunzip);
+
+let localIndexCache: { data: LocalIndex; loadedAt: number; sourcePath: string } | null = null;
+
+type LocalIndex = {
+  chapters: Array<{
+    exam: string;
+    exam_id: string;
+    subject: string;
+    subject_id: string;
+    chapter: string;
+    chapter_id: string;
+    total_questions: number;
+    file: string;
+  }>;
+};
+
+async function loadLocalIndex(): Promise<LocalIndex | null> {
+  if (localIndexCache && Date.now() - localIndexCache.loadedAt < 5 * 60_000) {
+    return localIndexCache.data;
+  }
+
+  const baseDir = path.resolve(process.cwd(), LOCAL_DATA_DIR);
+  const jsonPath = path.join(baseDir, 'master_index.json');
+  const gzPath = `${jsonPath}.gz`;
+
+  let contents: Buffer | null = null;
+  let sourcePath = '';
+
+  try {
+    contents = await fs.readFile(jsonPath);
+    sourcePath = jsonPath;
+  } catch {
+    try {
+      contents = await fs.readFile(gzPath);
+      sourcePath = gzPath;
+    } catch {
+      return null;
+    }
+  }
+
+  if (!contents) return null;
+
+  const raw = sourcePath.endsWith('.gz') ? await gunzipAsync(contents) : contents;
+  const parsed = JSON.parse(raw.toString('utf-8')) as LocalIndex;
+  if (!parsed || !Array.isArray(parsed.chapters)) return null;
+
+  localIndexCache = { data: parsed, loadedAt: Date.now(), sourcePath };
+  return parsed;
+}
+
+function uniqueBy<T>(items: T[], key: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const id = key(item);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function buildAssetUrl(assetPath?: string) {
+  if (!assetPath) return '';
+  if (assetPath.startsWith('http')) return assetPath;
+  return `/${LOCAL_DATA_DIR.replace(/^\//, '')}/${assetPath}`;
+}
+
+function buildQuestionHtml(text?: string, image?: string) {
+  const safeText = text?.trim() ?? '';
+  const imageUrl = buildAssetUrl(image);
+  const imageHtml = imageUrl ? `<div class="pyp-question-media"><img src="${imageUrl}" alt="Question visual" /></div>` : '';
+  return `${safeText}${imageHtml}`;
+}
+
+function buildOptionHtml(text?: string, image?: string) {
+  const safeText = text?.trim() ?? '';
+  const imageUrl = buildAssetUrl(image);
+  const imageHtml = imageUrl ? `<img src="${imageUrl}" alt="Option visual" />` : '';
+  return `${safeText}${imageHtml}`;
+}
+
+async function loadLocalQuestions(fileName: string) {
+  const baseDir = path.resolve(process.cwd(), LOCAL_DATA_DIR);
+  const jsonDir = path.join(baseDir, 'json');
+  const filePath = path.join(jsonDir, fileName);
+  let contents: Buffer;
+
+  try {
+    contents = await fs.readFile(filePath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    throw new Error(`Local data file missing: ${fileName}. ${message}`);
+  }
+
+  const raw = fileName.endsWith('.gz') ? await gunzipAsync(contents) : contents;
+  const lines = raw.toString('utf-8').split('\n').filter(Boolean);
+  return lines.map((line) => JSON.parse(line));
+}
 
 function buildUrlWithParams(url: string, params: Record<string, string | number | boolean | undefined> = {}) {
   const target = new URL(url);
@@ -53,6 +157,18 @@ async function fetchGetMarks(url: string, params?: Record<string, string | numbe
 }
 
 async function handleExams(req: VercelRequest, res: VercelResponse) {
+  const localIndex = await loadLocalIndex();
+  if (localIndex) {
+    const exams = uniqueBy(
+      localIndex.chapters.map((chapter) => ({
+        id: chapter.exam_id,
+        name: chapter.exam,
+      })),
+      (item) => item.id
+    );
+    return res.status(200).json({ success: true, data: { items: exams } });
+  }
+
   const data = await fetchGetMarks(GETMARKS_API.dashboard, { limit: 10000 });
   return res.status(200).json({ success: true, data });
 }
@@ -62,6 +178,20 @@ async function handleSubjects(req: VercelRequest, res: VercelResponse) {
   if (!examId) {
     return res.status(400).json({ error: 'examId is required' });
   }
+  const localIndex = await loadLocalIndex();
+  if (localIndex) {
+    const subjects = uniqueBy(
+      localIndex.chapters
+        .filter((chapter) => chapter.exam_id === examId)
+        .map((chapter) => ({
+          id: chapter.subject_id,
+          name: chapter.subject,
+        })),
+      (item) => item.id
+    );
+    return res.status(200).json({ success: true, data: { items: subjects } });
+  }
+
   const data = await fetchGetMarks(GETMARKS_API.examSubjects(examId), { limit: 10000 });
   return res.status(200).json({ success: true, data });
 }
@@ -72,6 +202,18 @@ async function handleChapters(req: VercelRequest, res: VercelResponse) {
   if (!examId || !subjectId) {
     return res.status(400).json({ error: 'examId and subjectId are required' });
   }
+  const localIndex = await loadLocalIndex();
+  if (localIndex) {
+    const chapters = localIndex.chapters
+      .filter((chapter) => chapter.exam_id === examId && chapter.subject_id === subjectId)
+      .map((chapter) => ({
+        id: chapter.chapter_id,
+        name: chapter.chapter,
+        questionCount: chapter.total_questions,
+      }));
+    return res.status(200).json({ success: true, data: { items: chapters } });
+  }
+
   const data = await fetchGetMarks(GETMARKS_API.subjectChapters(examId, subjectId), { limit: 10000 });
   return res.status(200).json({ success: true, data });
 }
@@ -83,6 +225,33 @@ async function handleQuestions(req: VercelRequest, res: VercelResponse) {
   if (!examId || !subjectId || !chapterId) {
     return res.status(400).json({ error: 'examId, subjectId, and chapterId are required' });
   }
+  const localIndex = await loadLocalIndex();
+  if (localIndex) {
+    const entry = localIndex.chapters.find(
+      (chapter) => chapter.exam_id === examId && chapter.subject_id === subjectId && chapter.chapter_id === chapterId
+    );
+    if (!entry) {
+      return res.status(404).json({ error: 'Chapter data not found in local index' });
+    }
+    const rows = await loadLocalQuestions(entry.file);
+    const questions = rows.map((row: any, index: number) => ({
+      id: row?.id ?? `${index + 1}`,
+      questionNumber: row?.index ?? index + 1,
+      subject: row?.subject ?? entry.subject,
+      type: row?.question_type ?? row?.type ?? '',
+      questionHtml: buildQuestionHtml(row?.question?.text, row?.question?.image),
+      options: Array.isArray(row?.options)
+        ? row.options.map((opt: any) => buildOptionHtml(opt?.text, opt?.image))
+        : [],
+      correctAnswer: Array.isArray(row?.correct_answer)
+        ? row.correct_answer.join(', ')
+        : row?.correct_answer ?? '',
+      solutionHtml: buildQuestionHtml(row?.solution?.text, row?.solution?.image),
+    }));
+
+    return res.status(200).json({ success: true, data: { items: questions } });
+  }
+
   const data = await fetchGetMarks(GETMARKS_API.questions(examId, subjectId, chapterId), {
     limit: 10000,
     hideOutOfSyllabus: 'false'
@@ -91,10 +260,6 @@ async function handleQuestions(req: VercelRequest, res: VercelResponse) {
 }
 
 async function handleExport(res: VercelResponse) {
-  if (!process.env.GETMARKS_AUTH_TOKEN) {
-    return res.status(400).json({ error: 'GETMARKS_AUTH_TOKEN is required' });
-  }
-
   try {
     const child = spawn('python', ['scripts/getmarks_pyqs.py'], {
       cwd: process.cwd(),
