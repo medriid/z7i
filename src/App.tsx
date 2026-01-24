@@ -1392,37 +1392,289 @@ function ProfileModal({
   );
 }
 
-function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
+type LightboxContext = {
+  questionId?: string;
+  label?: string;
+  subject?: string;
+  testName?: string;
+};
+
+type DrawingPoint = {
+  x: number;
+  y: number;
+};
+
+type DrawingStroke = {
+  color: string;
+  size: number;
+  points: DrawingPoint[];
+};
+
+type SavedQuestionNote = {
+  id: string;
+  createdAt: string;
+  imageSrc: string;
+  note: string;
+  strokes: DrawingStroke[];
+  questionId?: string;
+  label?: string;
+  subject?: string;
+  testName?: string;
+};
+
+const SAVED_QUESTION_STORAGE_KEY = 'saved-question-annotations';
+
+const loadSavedQuestionNotes = (): SavedQuestionNote[] => {
+  const raw = localStorage.getItem(SAVED_QUESTION_STORAGE_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveSavedQuestionNotes = (notes: SavedQuestionNote[]) => {
+  localStorage.setItem(SAVED_QUESTION_STORAGE_KEY, JSON.stringify(notes));
+};
+
+const addSavedQuestionNote = (note: SavedQuestionNote) => {
+  const next = [note, ...loadSavedQuestionNotes()];
+  saveSavedQuestionNotes(next);
+  return next;
+};
+
+const removeSavedQuestionNote = (id: string) => {
+  const next = loadSavedQuestionNotes().filter(note => note.id !== id);
+  saveSavedQuestionNotes(next);
+  return next;
+};
+
+const createSavedQuestionId = () =>
+  typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `saved-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+function ImageLightbox({
+  src,
+  onClose,
+  context,
+}: {
+  src: string;
+  onClose: () => void;
+  context?: LightboxContext;
+}) {
+  const [drawingEnabled, setDrawingEnabled] = useState(false);
+  const [note, setNote] = useState('');
+  const [saveStatus, setSaveStatus] = useState('');
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const drawingRef = useRef(false);
+  const currentStrokeRef = useRef<DrawingStroke | null>(null);
+  const strokesRef = useRef<DrawingStroke[]>([]);
+
+  const getAccentColor = useCallback(() => {
+    return (
+      getComputedStyle(document.documentElement)
+        .getPropertyValue('--accent')
+        .trim() || '#fbbf24'
+    );
+  }, []);
+
+  const drawStrokes = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    strokesRef.current.forEach(stroke => {
+      if (stroke.points.length < 2) return;
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = stroke.size;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      stroke.points.forEach((point, index) => {
+        const x = point.x * width;
+        const y = point.y * height;
+        if (index === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.stroke();
+    });
+  }, []);
+
+  const resizeCanvas = useCallback(() => {
+    const image = imageRef.current;
+    const canvas = canvasRef.current;
+    if (!image || !canvas) return;
+    const rect = image.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+    drawStrokes();
+  }, [drawStrokes]);
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     document.addEventListener('keydown', handleEsc);
     document.body.style.overflow = 'hidden';
-    
+    resizeCanvas();
+
+    const handleResize = () => resizeCanvas();
+    window.addEventListener('resize', handleResize);
+
     return () => {
       document.removeEventListener('keydown', handleEsc);
       document.body.style.overflow = '';
+      window.removeEventListener('resize', handleResize);
     };
-  }, [onClose]);
+  }, [onClose, resizeCanvas]);
+
+  const getRelativePoint = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - rect.left) / rect.width,
+      y: (event.clientY - rect.top) / rect.height,
+    };
+  };
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!drawingEnabled) return;
+    event.preventDefault();
+    const canvas = canvasRef.current;
+    canvas?.setPointerCapture(event.pointerId);
+    drawingRef.current = true;
+    const point = getRelativePoint(event);
+    const stroke: DrawingStroke = {
+      color: getAccentColor(),
+      size: 3,
+      points: [point],
+    };
+    strokesRef.current.push(stroke);
+    currentStrokeRef.current = stroke;
+    drawStrokes();
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!drawingEnabled || !drawingRef.current || !currentStrokeRef.current) return;
+    event.preventDefault();
+    const point = getRelativePoint(event);
+    currentStrokeRef.current.points.push(point);
+    drawStrokes();
+  };
+
+  const handlePointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!drawingEnabled) return;
+    event.preventDefault();
+    drawingRef.current = false;
+    currentStrokeRef.current = null;
+    const canvas = canvasRef.current;
+    canvas?.releasePointerCapture(event.pointerId);
+  };
+
+  const handleClearDrawing = () => {
+    strokesRef.current = [];
+    drawStrokes();
+  };
+
+  const handleSave = () => {
+    if (!note.trim() && strokesRef.current.length === 0) {
+      setSaveStatus('Add a note or draw before saving.');
+      return;
+    }
+    const entry: SavedQuestionNote = {
+      id: createSavedQuestionId(),
+      createdAt: new Date().toISOString(),
+      imageSrc: src,
+      note: note.trim(),
+      strokes: strokesRef.current,
+      questionId: context?.questionId,
+      label: context?.label,
+      subject: context?.subject,
+      testName: context?.testName,
+    };
+    addSavedQuestionNote(entry);
+    setSaveStatus('Saved to Bookmarked Questions.');
+  };
 
   return (
     <div className="lightbox-overlay" onClick={onClose}>
       <button className="lightbox-close" onClick={onClose}>
         <X size={24} />
       </button>
+      <div className="lightbox-toolbar" onClick={(event) => event.stopPropagation()}>
+        <button
+          className={`lightbox-tool ${drawingEnabled ? 'active' : ''}`}
+          onClick={() => {
+            setDrawingEnabled(prev => !prev);
+            setSaveStatus('');
+          }}
+          type="button"
+        >
+          <PenTool size={16} />
+          {drawingEnabled ? 'Drawing' : 'Annotate'}
+        </button>
+        {drawingEnabled && (
+          <>
+            <textarea
+              className="lightbox-note"
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder="Add a quick note..."
+              rows={2}
+            />
+            <button className="lightbox-tool" onClick={handleClearDrawing} type="button">
+              <RotateCcw size={16} />
+              Clear
+            </button>
+            <button className="lightbox-tool primary" onClick={handleSave} type="button">
+              <Save size={16} />
+              Save
+            </button>
+          </>
+        )}
+        {saveStatus && <span className="lightbox-status">{saveStatus}</span>}
+      </div>
       <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
-        <img src={src} alt="Enlarged view" className="lightbox-image" />
+        <div className="lightbox-media">
+          <img
+            ref={imageRef}
+            src={src}
+            alt="Enlarged view"
+            className="lightbox-image"
+            onLoad={resizeCanvas}
+          />
+          <canvas
+            ref={canvasRef}
+            className={`lightbox-canvas ${drawingEnabled ? 'active' : ''}`}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerLeave={handlePointerUp}
+          />
+        </div>
       </div>
-      <div className="lightbox-hint">
-        Click anywhere or press ESC to close
-      </div>
+      <div className="lightbox-hint">Click anywhere or press ESC to close</div>
     </div>
   );
 }
 
-function useImageLightbox() {
-  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+function useImageLightbox(context?: LightboxContext) {
+  const [lightboxState, setLightboxState] = useState<{ src: string; context?: LightboxContext } | null>(null);
 
   const handleImageClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -1430,15 +1682,15 @@ function useImageLightbox() {
       e.preventDefault();
       e.stopPropagation();
       const src = (target as HTMLImageElement).src;
-      setLightboxImage(src);
+      setLightboxState({ src, context });
     }
-  }, []);
+  }, [context]);
 
   const closeLightbox = useCallback(() => {
-    setLightboxImage(null);
+    setLightboxState(null);
   }, []);
 
-  return { lightboxImage, handleImageClick, closeLightbox };
+  return { lightboxState, handleImageClick, closeLightbox };
 }
 
 function TimeIntelligenceDashboard({ 
@@ -2081,8 +2333,92 @@ interface BookmarkedQuestion {
   };
 }
 
+function SavedQuestionSketch({ entry }: { entry: SavedQuestionNote }) {
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  const drawSketch = useCallback(() => {
+    const image = imageRef.current;
+    const canvas = canvasRef.current;
+    if (!image || !canvas) return;
+    const rect = image.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+    entry.strokes.forEach(stroke => {
+      if (stroke.points.length < 2) return;
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = stroke.size;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      stroke.points.forEach((point, index) => {
+        const x = point.x * rect.width;
+        const y = point.y * rect.height;
+        if (index === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.stroke();
+    });
+  }, [entry.strokes]);
+
+  useEffect(() => {
+    drawSketch();
+    const handleResize = () => drawSketch();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [drawSketch]);
+
+  return (
+    <div className="saved-question-media">
+      <img ref={imageRef} src={entry.imageSrc} alt="Saved question" onLoad={drawSketch} />
+      <canvas ref={canvasRef} className="saved-question-canvas" />
+    </div>
+  );
+}
+
+function SavedQuestionCard({
+  entry,
+  onRemove,
+}: {
+  entry: SavedQuestionNote;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="saved-question-card">
+      <div className="saved-question-header">
+        <div>
+          <div className="saved-question-title">
+            {entry.label || 'Saved Question'}
+            {entry.subject && <span className="saved-question-subject">{entry.subject}</span>}
+          </div>
+          {entry.testName && <div className="saved-question-test">{entry.testName}</div>}
+          <div className="saved-question-date">
+            Saved {formatDistanceToNow(new Date(entry.createdAt), { addSuffix: true })}
+          </div>
+        </div>
+        <button className="saved-question-remove" onClick={() => onRemove(entry.id)} type="button">
+          <Trash2 size={16} />
+        </button>
+      </div>
+      <SavedQuestionSketch entry={entry} />
+      {entry.note && <div className="saved-question-note">{entry.note}</div>}
+    </div>
+  );
+}
+
 function BookmarksView({ onBack }: { onBack: () => void }) {
   const [bookmarks, setBookmarks] = useState<BookmarkedQuestion[]>([]);
+  const [savedQuestions, setSavedQuestions] = useState<SavedQuestionNote[]>([]);
   const [loading, setLoading] = useState(true);
   const [groupBy, setGroupBy] = useState<'test' | 'subject'>('test');
   const [expandedQuestion, setExpandedQuestion] = useState<string | null>(null);
@@ -2099,6 +2435,7 @@ function BookmarksView({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     loadBookmarks();
+    setSavedQuestions(loadSavedQuestionNotes());
   }, []);
 
   const loadBookmarks = async () => {
@@ -2134,6 +2471,10 @@ function BookmarksView({ onBack }: { onBack: () => void }) {
     } catch (err) {
       console.error('Failed to remove bookmark:', err);
     }
+  };
+
+  const handleRemoveSavedQuestion = (id: string) => {
+    setSavedQuestions(removeSavedQuestionNote(id));
   };
 
   const startFlashcards = () => {
@@ -2569,6 +2910,22 @@ function BookmarksView({ onBack }: { onBack: () => void }) {
 
         {activeMode === 'list' && (
           <>
+            {savedQuestions.length > 0 && (
+              <section className="saved-questions-section">
+                <div className="saved-questions-header">
+                  <div>
+                    <h2>Saved Questions</h2>
+                    <p>Annotated screenshots saved from the image viewer.</p>
+                  </div>
+                  <span className="saved-questions-count">{savedQuestions.length} saved</span>
+                </div>
+                <div className="saved-questions-grid">
+                  {savedQuestions.map(entry => (
+                    <SavedQuestionCard key={entry.id} entry={entry} onRemove={handleRemoveSavedQuestion} />
+                  ))}
+                </div>
+              </section>
+            )}
             {loading ? (
               <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}>
                 <span className="spinner" />
@@ -2576,9 +2933,13 @@ function BookmarksView({ onBack }: { onBack: () => void }) {
             ) : bookmarks.length === 0 ? (
               <div className="empty-state">
                 <Bookmark size={48} />
-                <div className="empty-state-title">No Saved Questions</div>
+                <div className="empty-state-title">
+                  {savedQuestions.length > 0 ? 'No Bookmarked Test Questions' : 'No Saved Questions'}
+                </div>
                 <div className="empty-state-text">
-                  Bookmark questions while reviewing tests to save them here for later.
+                  {savedQuestions.length > 0
+                    ? 'Bookmark questions while reviewing tests to add them here.'
+                    : 'Bookmark questions while reviewing tests to save them here for later.'}
                 </div>
               </div>
             ) : (
@@ -5828,7 +6189,15 @@ function ActionsPanel({
 }
 
 function ExamQuestionView({ question, displayNumber }: { question: Question; displayNumber: number }) {
-  const { lightboxImage, handleImageClick, closeLightbox } = useImageLightbox();
+  const lightboxContext = useMemo(
+    () => ({
+      questionId: question.id,
+      label: `Q${displayNumber}`,
+      subject: question.subject,
+    }),
+    [question.id, question.subject, displayNumber]
+  );
+  const { lightboxState, handleImageClick, closeLightbox } = useImageLightbox(lightboxContext);
   
   const options = [
     { label: 'A', content: question.option1 },
@@ -5979,8 +6348,12 @@ function ExamQuestionView({ question, displayNumber }: { question: Question; dis
       )}
     </div>
     
-    {lightboxImage && (
-      <ImageLightbox src={lightboxImage} onClose={closeLightbox} />
+    {lightboxState && (
+      <ImageLightbox
+        src={lightboxState.src}
+        context={lightboxState.context}
+        onClose={closeLightbox}
+      />
     )}
     </>
   );
@@ -7200,6 +7573,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
   const [customTestLogs, setCustomTestLogs] = useState<Array<{ timestamp: string; message: string; level: 'info' | 'success' | 'error' }>>([]);
   const [customExamTestId, setCustomExamTestId] = useState<string | null>(null);
   const [customResultsAttemptId, setCustomResultsAttemptId] = useState<string | null>(null);
+  const [pendingTestId, setPendingTestId] = useState<string | null>(null);
   
   const isOwnerUser = Boolean(user.isOwner);
   const sortedTests = useMemo(() => {
@@ -7263,6 +7637,81 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     };
   }, [tests, sortedTests]);
 
+  const resetViews = useCallback(() => {
+    setSelectedTest(null);
+    setExamWriterTest(null);
+    setCustomExamTestId(null);
+    setCustomResultsAttemptId(null);
+    setTimeIntelReview(null);
+    setShowBookmarks(false);
+    setShowForum(false);
+    setShowTimeIntel(false);
+    setShowPYP(false);
+    setShowOwnerDashboard(false);
+    setShowAiChats(false);
+    setPendingTestId(null);
+  }, []);
+
+  const navigateTo = useCallback((path: string) => {
+    window.history.pushState({}, '', path);
+  }, []);
+
+  const applyRoute = useCallback(
+    (path: string) => {
+      if (!isValidRoute(path)) return;
+      resetViews();
+      if (path.startsWith('/test/')) {
+        const targetId = path.replace('/test/', '');
+        setPendingTestId(targetId || null);
+        return;
+      }
+      if (path === '/bookmarks') {
+        setShowBookmarks(true);
+        return;
+      }
+      if (path === '/forum') {
+        setShowForum(true);
+        return;
+      }
+      if (path === '/pyp') {
+        setShowPYP(true);
+        return;
+      }
+      if (path === '/time-intel') {
+        setShowTimeIntel(true);
+        return;
+      }
+      if (path === '/owner' && isOwnerUser) {
+        setShowOwnerDashboard(true);
+        return;
+      }
+      if (path === '/ai-chats') {
+        setShowAiChats(true);
+        return;
+      }
+    },
+    [isOwnerUser, resetViews]
+  );
+
+  useEffect(() => {
+    applyRoute(window.location.pathname);
+  }, [applyRoute]);
+
+  useEffect(() => {
+    const handlePopState = () => applyRoute(window.location.pathname);
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [applyRoute]);
+
+  useEffect(() => {
+    if (!pendingTestId) return;
+    const match = tests.find(test => test.id === pendingTestId);
+    if (match) {
+      setSelectedTest(match);
+      setPendingTestId(null);
+    }
+  }, [pendingTestId, tests]);
+
   const loadTests = useCallback(async () => {
     if (!user.z7iLinked) return;
     
@@ -7310,12 +7759,6 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
       setSelectedNoQuestionId(testsWithoutQuestions[0].id);
     }
   }, [testsWithoutQuestions, selectedNoQuestionId]);
-
-  useEffect(() => {
-    if (window.location.pathname === '/ai-chats') {
-      setShowAiChats(true);
-    }
-  }, []);
 
   useEffect(() => {
     if (!user.z7iLinked || !user.lastSyncAt || syncing) return;
@@ -7529,19 +7972,51 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     }
   };
 
+  const openBookmarks = () => {
+    resetViews();
+    setShowBookmarks(true);
+    navigateTo('/bookmarks');
+  };
+
+  const openForum = () => {
+    resetViews();
+    setShowForum(true);
+    navigateTo('/forum');
+  };
+
+  const openPYP = () => {
+    resetViews();
+    setShowPYP(true);
+    navigateTo('/pyp');
+  };
+
+  const openTimeIntel = () => {
+    resetViews();
+    setShowTimeIntel(true);
+    navigateTo('/time-intel');
+  };
+
+  const openOwnerDashboard = () => {
+    if (!isOwnerUser) return;
+    resetViews();
+    setShowOwnerDashboard(true);
+    navigateTo('/owner');
+  };
+
+  const openAiChats = () => {
+    resetViews();
+    setShowAiChats(true);
+    navigateTo('/ai-chats');
+  };
+
+  const handleSelectTest = (test: Test) => {
+    setSelectedTest(test);
+    navigateTo(`/test/${test.id}`);
+  };
+
   const goHome = () => {
-    setSelectedTest(null);
-    setExamWriterTest(null);
-    setCustomExamTestId(null);
-    setCustomResultsAttemptId(null);
-    setTimeIntelReview(null);
-    setShowBookmarks(false);
-    setShowForum(false);
-    setShowTimeIntel(false);
-    setShowPYP(false);
-    setShowOwnerDashboard(false);
-    setShowAiChats(false);
-    window.history.pushState({}, '', '/');
+    resetViews();
+    navigateTo('/');
   };
 
   if (examWriterTest) {
@@ -7552,8 +8027,8 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
           test={examWriterTest} 
           onBack={() => setExamWriterTest(null)} 
           onViewAnalysis={() => {
-            setSelectedTest(examWriterTest);
             setExamWriterTest(null);
+            handleSelectTest(examWriterTest);
           }}
         />
         {showProfile && (
@@ -7613,7 +8088,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     return (
       <>
         <Navigation user={user} onSync={handleSync} syncing={syncing} onProfileClick={() => setShowProfile(true)} onHomeClick={goHome} />
-        <TestDetailView attemptId={selectedTest.id} userId={user.id} onBack={() => setSelectedTest(null)} />
+        <TestDetailView attemptId={selectedTest.id} userId={user.id} onBack={goHome} />
         {showProfile && (
           <ProfileModal 
             user={user} 
@@ -7630,7 +8105,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     return (
       <>
         <Navigation user={user} onSync={handleSync} syncing={syncing} onProfileClick={() => setShowProfile(true)} onHomeClick={goHome} />
-        <BookmarksView onBack={() => setShowBookmarks(false)} />
+        <BookmarksView onBack={goHome} />
         {showProfile && (
           <ProfileModal 
             user={user} 
@@ -7647,7 +8122,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     return (
       <>
         <Navigation user={user} onSync={handleSync} syncing={syncing} onProfileClick={() => setShowProfile(true)} onHomeClick={goHome} />
-        <ForumView onBack={() => setShowForum(false)} />
+        <ForumView onBack={goHome} />
         {showProfile && (
           <ProfileModal 
             user={user} 
@@ -7665,10 +8140,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
       <>
         <Navigation user={user} onSync={handleSync} syncing={syncing} onProfileClick={() => setShowProfile(true)} onHomeClick={goHome} />
         <AiChatbotsPage
-          onBack={() => {
-            setShowAiChats(false);
-            window.history.pushState({}, '', '/');
-          }}
+          onBack={goHome}
         />
         {showProfile && (
           <ProfileModal 
@@ -7686,7 +8158,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     return (
       <>
         <Navigation user={user} onSync={handleSync} syncing={syncing} onProfileClick={() => setShowProfile(true)} onHomeClick={goHome} />
-        <PastYearPapers onBack={() => setShowPYP(false)} />
+        <PastYearPapers onBack={goHome} />
         {showProfile && (
           <ProfileModal 
             user={user} 
@@ -7704,7 +8176,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
       <>
         <Navigation user={user} onSync={handleSync} syncing={syncing} onProfileClick={() => setShowProfile(true)} onHomeClick={goHome} />
         <TimeIntelligenceDashboard 
-          onBack={() => setShowTimeIntel(false)} 
+          onBack={goHome} 
           onOpenReview={({ attemptId, questionId }) => {
             setShowTimeIntel(false);
             setTimeIntelReview({ attemptId, questionId });
@@ -7726,7 +8198,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     return (
       <>
         <Navigation user={user} onSync={handleSync} syncing={syncing} onProfileClick={() => setShowProfile(true)} onHomeClick={goHome} />
-        <OwnerDashboard onBack={() => setShowOwnerDashboard(false)} />
+        <OwnerDashboard onBack={goHome} />
         {showProfile && (
           <ProfileModal 
             user={user} 
@@ -8087,7 +8559,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
             </div>
             <div className="page-header-actions">
               {isOwnerUser && (
-                <button className="btn btn-secondary" onClick={() => setShowOwnerDashboard(true)} style={{ background: 'var(--warning)', color: 'black' }}>
+                <button className="btn btn-secondary" onClick={openOwnerDashboard} style={{ background: 'var(--warning)', color: 'black' }}>
                   <Shield size={16} />
                   Owner
                 </button>
@@ -8104,31 +8576,25 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
                   Custom Test
                 </button>
               )}
-              <button className="btn btn-secondary" onClick={() => setShowForum(true)}>
+              <button className="btn btn-secondary" onClick={openForum}>
                 <MessageSquare size={16} />
                 Forum
               </button>
-              <button
-                className="btn btn-secondary"
-                onClick={() => {
-                  setShowAiChats(true);
-                  window.history.pushState({}, '', '/ai-chats');
-                }}
-              >
+              <button className="btn btn-secondary" onClick={openAiChats}>
                 <MessageCircle size={16} />
                 AI Chats
               </button>
-              <button className="btn btn-secondary" onClick={() => setShowPYP(true)}>
+              <button className="btn btn-secondary" onClick={openPYP}>
                 <Trophy size={16} />
                 PYP
               </button>
               {user.z7iLinked && (
                 <>
-                  <button className="btn btn-secondary" onClick={() => setShowTimeIntel(true)}>
+                  <button className="btn btn-secondary" onClick={openTimeIntel}>
                     <Clock size={16} />
                     Time Intelligence
                   </button>
-                  <button className="btn btn-secondary bookmarks-btn" onClick={() => setShowBookmarks(true)}>
+                  <button className="btn btn-secondary bookmarks-btn" onClick={openBookmarks}>
                     <Bookmark size={16} />
                     Saved Questions
                   </button>
@@ -8162,7 +8628,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
             </div>
           ) : (
             <>
-              <TestsList tests={testsWithQuestions} onSelectTest={setSelectedTest} onWriteExam={setExamWriterTest} />
+              <TestsList tests={testsWithQuestions} onSelectTest={handleSelectTest} onWriteExam={setExamWriterTest} />
               {customTestsSection}
               <section className="prep-overview">
                 <div className="prep-header">
@@ -8173,17 +8639,17 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
                   <div className="prep-actions">
                     <button
                       className="btn btn-secondary btn-small"
-                      onClick={() => sortedTests[0] && setSelectedTest(sortedTests[0])}
+                      onClick={() => sortedTests[0] && handleSelectTest(sortedTests[0])}
                       disabled={!sortedTests[0]}
                     >
                       <TrendingUp size={14} />
                       Review Latest
                     </button>
-                    <button className="btn btn-secondary btn-small" onClick={() => setShowBookmarks(true)}>
+                    <button className="btn btn-secondary btn-small" onClick={openBookmarks}>
                       <Bookmark size={14} />
                       Review Saved
                     </button>
-                    <button className="btn btn-secondary btn-small" onClick={() => setShowTimeIntel(true)}>
+                    <button className="btn btn-secondary btn-small" onClick={openTimeIntel}>
                       <Timer size={14} />
                       Time Focus
                     </button>
@@ -8234,7 +8700,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
                           <button
                             key={test.id}
                             className="prep-list-item"
-                            onClick={() => setSelectedTest(test)}
+                            onClick={() => handleSelectTest(test)}
                           >
                             <span className="prep-list-title">{test.testName}</span>
                             <span className="prep-list-score">{test.scorePercent}%</span>
@@ -8295,7 +8761,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
                       <TestCard
                         key={test.id}
                         test={test}
-                        onClick={() => setSelectedTest(test)}
+                        onClick={() => handleSelectTest(test)}
                         onWriteExam={() => setExamWriterTest(test)}
                         className="test-card-muted"
                       />
