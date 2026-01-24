@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const GETMARKS_AUTH_TOKEN =
@@ -26,7 +27,7 @@ function buildUrlWithParams(url: string, params: Record<string, string | number 
 function setCorsHeaders(res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
@@ -89,6 +90,26 @@ async function handleQuestions(req: VercelRequest, res: VercelResponse) {
   return res.status(200).json({ success: true, data });
 }
 
+async function handleExport(res: VercelResponse) {
+  if (!process.env.GETMARKS_AUTH_TOKEN) {
+    return res.status(400).json({ error: 'GETMARKS_AUTH_TOKEN is required' });
+  }
+
+  try {
+    const child = spawn('python', ['scripts/getmarks_pyqs.py'], {
+      cwd: process.cwd(),
+      env: process.env,
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+    return res.status(202).json({ success: true, message: 'GetMarks export started' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return res.status(500).json({ error: 'Failed to start export', details: message });
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCorsHeaders(res);
 
@@ -96,23 +117,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
   const action = typeof req.query.action === 'string' ? req.query.action : '';
 
   try {
     switch (action) {
       case 'exams':
+        if (req.method !== 'GET') {
+          return res.status(405).json({ error: 'Method not allowed' });
+        }
         return await handleExams(req, res);
       case 'subjects':
+        if (req.method !== 'GET') {
+          return res.status(405).json({ error: 'Method not allowed' });
+        }
         return await handleSubjects(req, res);
       case 'chapters':
+        if (req.method !== 'GET') {
+          return res.status(405).json({ error: 'Method not allowed' });
+        }
         return await handleChapters(req, res);
       case 'questions':
+        if (req.method !== 'GET') {
+          return res.status(405).json({ error: 'Method not allowed' });
+        }
         return await handleQuestions(req, res);
+      case 'export':
+        if (req.method !== 'POST') {
+          return res.status(405).json({ error: 'Method not allowed' });
+        }
+        return await handleExport(res);
       default:
+        if (req.method !== 'GET') {
+          return res.status(405).json({ error: 'Method not allowed' });
+        }
         return res.status(400).json({ error: 'Unknown action' });
     }
   } catch (error) {
