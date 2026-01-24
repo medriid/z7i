@@ -104,11 +104,15 @@ async function handleRegister(req: VercelRequest, res: VercelResponse) {
     }
 
     const hashedPassword = await hashPassword(password);
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || (req.headers['x-real-ip'] as string) || 'unknown';
+    const normalizedIp = Array.isArray(ipAddress) ? ipAddress[0] : ipAddress.split(',')[0].trim();
+
     const user = await prisma.user.create({
       data: {
         email: email.toLowerCase(),
         password: hashedPassword,
         name: name || null,
+        lastIpAddress: normalizedIp,
       },
       select: {
         id: true,

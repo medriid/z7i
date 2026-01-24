@@ -54,6 +54,26 @@ export function OwnerDashboard({ onBack }: { onBack: () => void }) {
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
   const [runningExport, setRunningExport] = useState(false);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [mapIp, setMapIp] = useState<string | null>(null);
+
+  const upgradeRecommendations = [
+    {
+      title: 'Premium Analytics Pack',
+      description: 'Deep cohort trends, accuracy heatmaps, and chapter-wise weak area tracking.',
+    },
+    {
+      title: 'Proctoring + Integrity',
+      description: 'Browser tab tracking, device fingerprinting, and attempt anomaly alerts.',
+    },
+    {
+      title: 'Mentor Insights',
+      description: 'Automated feedback summaries for each student with action items.',
+    },
+    {
+      title: 'Priority Support SLA',
+      description: 'Faster response time, dedicated escalation channel, and uptime reports.',
+    },
+  ];
 
   const handleFetchAll = async () => {
     setFetchingAll(true);
@@ -399,6 +419,21 @@ export function OwnerDashboard({ onBack }: { onBack: () => void }) {
           </div>
         </div>
 
+        <div className="owner-upgrades">
+          <div className="owner-upgrades-header">
+            <h2>Recommended upgrades</h2>
+            <p>Boost retention, oversight, and premium outcomes with focused add-ons.</p>
+          </div>
+          <div className="owner-upgrades-grid">
+            {upgradeRecommendations.map((upgrade) => (
+              <div key={upgrade.title} className="owner-upgrade-card">
+                <h3>{upgrade.title}</h3>
+                <p>{upgrade.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}>
             <span className="spinner" />
@@ -502,7 +537,14 @@ export function OwnerDashboard({ onBack }: { onBack: () => void }) {
                             fontSize: '0.875rem'
                           }}>
                             <Globe size={14} style={{ color: 'var(--text-muted)' }} />
-                            {user.lastIpAddress}
+                            <button
+                              type="button"
+                              className="ip-map-link"
+                              onClick={() => setMapIp(user.lastIpAddress)}
+                              title="View location in Google Maps"
+                            >
+                              {user.lastIpAddress}
+                            </button>
                           </div>
                         ) : (
                           <span style={{ color: 'var(--text-muted)' }}>Unknown</span>
@@ -593,6 +635,29 @@ export function OwnerDashboard({ onBack }: { onBack: () => void }) {
           </div>
         )}
       </div>
+
+      {mapIp && (
+        <div className="modal-overlay">
+          <div className="modal map-modal">
+            <div className="map-modal-header">
+              <div>
+                <h2>IP location</h2>
+                <p>Google Maps preview for {mapIp}</p>
+              </div>
+              <button className="btn btn-secondary btn-small" onClick={() => setMapIp(null)}>
+                Close
+              </button>
+            </div>
+            <div className="map-modal-frame">
+              <iframe
+                title={`Map for ${mapIp}`}
+                src={`https://maps.google.com/maps?q=${encodeURIComponent(mapIp)}&z=11&output=embed`}
+                loading="lazy"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
