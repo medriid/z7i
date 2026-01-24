@@ -769,49 +769,55 @@ async function handleResyncTest(req: VercelRequest, res: VercelResponse) {
         include: { test: true }
       });
     }
-    for (const q of questions) {
-      const qId = q._id.$oid;
-      const subjectId = q.subject.$oid;
-      const hasAnswer = q.std_ans !== null && q.std_ans !== undefined && String(q.std_ans).trim() !== '';
-      await prisma.questionResponse.upsert({
-        where: { z7iQuestionId_attemptId: { z7iQuestionId: qId, attemptId: updatedAttempt.id } },
-        create: {
-          z7iQuestionId: qId,
-          attemptId: updatedAttempt.id,
-          questionOrder: q.__order,
-          subjectId,
-          subjectName: SUBJECT_MAP[subjectId] || 'Unknown',
-          questionType: q.question_type,
-          questionHtml: q.question,
-          option1: q.opt1 || null,
-          option2: q.opt2 || null,
-          option3: q.opt3 || null,
-          option4: q.opt4 || null,
-          correctAnswer: q.ans,
-          studentAnswer: hasAnswer ? String(q.std_ans) : null,
-          answerStatus: deriveAnswerStatus(q.ans_status, hasAnswer),
-          marksPositive: parseFloat(q.marks_positive),
-          marksNegative: parseFloat(q.marks_negative),
-          scoreObtained: hasAnswer ? (q.p_score + q.n_score) : 0,
-          timeTaken: q.time_taken || null,
-          solutionHtml: q.find_hint || null,
-        },
-        update: {
-          questionOrder: q.__order,
-          subjectName: SUBJECT_MAP[subjectId] || 'Unknown',
-          questionType: q.question_type,
-          questionHtml: q.question,
-          option1: q.opt1 || null,
-          option2: q.opt2 || null,
-          option3: q.opt3 || null,
-          option4: q.opt4 || null,
-          correctAnswer: q.ans,
-          studentAnswer: hasAnswer ? String(q.std_ans) : null,
-          answerStatus: deriveAnswerStatus(q.ans_status, hasAnswer),
-          scoreObtained: hasAnswer ? (q.p_score + q.n_score) : 0,
-          timeTaken: q.time_taken || null,
-        }
-      });
+    const batchSize = 50;
+    for (let i = 0; i < questions.length; i += batchSize) {
+      const batch = questions.slice(i, i + batchSize);
+      await Promise.all(
+        batch.map(q => {
+          const qId = q._id.$oid;
+          const subjectId = q.subject.$oid;
+          const hasAnswer = q.std_ans !== null && q.std_ans !== undefined && String(q.std_ans).trim() !== '';
+          return prisma.questionResponse.upsert({
+            where: { z7iQuestionId_attemptId: { z7iQuestionId: qId, attemptId: updatedAttempt.id } },
+            create: {
+              z7iQuestionId: qId,
+              attemptId: updatedAttempt.id,
+              questionOrder: q.__order,
+              subjectId,
+              subjectName: SUBJECT_MAP[subjectId] || 'Unknown',
+              questionType: q.question_type,
+              questionHtml: q.question,
+              option1: q.opt1 || null,
+              option2: q.opt2 || null,
+              option3: q.opt3 || null,
+              option4: q.opt4 || null,
+              correctAnswer: q.ans,
+              studentAnswer: hasAnswer ? String(q.std_ans) : null,
+              answerStatus: deriveAnswerStatus(q.ans_status, hasAnswer),
+              marksPositive: parseFloat(q.marks_positive),
+              marksNegative: parseFloat(q.marks_negative),
+              scoreObtained: hasAnswer ? (q.p_score + q.n_score) : 0,
+              timeTaken: q.time_taken || null,
+              solutionHtml: q.find_hint || null,
+            },
+            update: {
+              questionOrder: q.__order,
+              subjectName: SUBJECT_MAP[subjectId] || 'Unknown',
+              questionType: q.question_type,
+              questionHtml: q.question,
+              option1: q.opt1 || null,
+              option2: q.opt2 || null,
+              option3: q.opt3 || null,
+              option4: q.opt4 || null,
+              correctAnswer: q.ans,
+              studentAnswer: hasAnswer ? String(q.std_ans) : null,
+              answerStatus: deriveAnswerStatus(q.ans_status, hasAnswer),
+              scoreObtained: hasAnswer ? (q.p_score + q.n_score) : 0,
+              timeTaken: q.time_taken || null,
+            }
+          });
+        })
+      );
     }
 
     return res.status(200).json({
