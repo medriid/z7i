@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { 
-  ChevronLeft, Users, Shield, Zap, Search, 
+import {
+  ChevronLeft, Users, Shield, Zap, Search,
   RefreshCw, Clock, Mail, Globe, Check, X
 } from 'lucide-react';
 import './index.css';
@@ -52,6 +52,8 @@ export function OwnerDashboard({ onBack }: { onBack: () => void }) {
   const [tests, setTests] = useState<any[]>([]);
   const [loadingTests, setLoadingTests] = useState(false);
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
+  const [runningExport, setRunningExport] = useState(false);
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
 
   const handleFetchAll = async () => {
     setFetchingAll(true);
@@ -108,6 +110,23 @@ export function OwnerDashboard({ onBack }: { onBack: () => void }) {
       setFetchAllStatus('Network error. Please try again.');
     } finally {
       setFetchingAll(false);
+    }
+  };
+
+  const handleRunExport = async () => {
+    setRunningExport(true);
+    setExportStatus('Starting GetMarks export...');
+    try {
+      const data = await apiRequest('/marks?action=export', { method: 'POST' });
+      if (data.success) {
+        setExportStatus('GetMarks export started. Check server logs for progress.');
+      } else {
+        setExportStatus('Export failed: ' + (data.error || 'Unknown error'));
+      }
+    } catch {
+      setExportStatus('Network error. Please try again.');
+    } finally {
+      setRunningExport(false);
     }
   };
 
@@ -235,6 +254,15 @@ export function OwnerDashboard({ onBack }: { onBack: () => void }) {
               <Search size={16} />
               List & Sync Specific Test
             </button>
+            <button
+              className="btn btn-secondary"
+              style={{ minWidth: 180, display: 'flex', alignItems: 'center', gap: 8 }}
+              onClick={handleRunExport}
+              disabled={runningExport}
+            >
+              <RefreshCw size={16} className={runningExport ? 'spin' : ''} />
+              {runningExport ? 'Starting Export...' : 'Run GetMarks Export'}
+            </button>
           </div>
                 {showTestList && (
                   <div className="modal-overlay">
@@ -316,6 +344,11 @@ export function OwnerDashboard({ onBack }: { onBack: () => void }) {
                 )}
               </div>
             )}
+          </div>
+        )}
+        {exportStatus && (
+          <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+            {exportStatus}
           </div>
         )}
 
