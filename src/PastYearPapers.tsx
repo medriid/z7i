@@ -195,8 +195,8 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
       description: 'Distraction-free PYQ practice with consistent formatting.',
     },
     {
-      title: 'Local import ready',
-      description: 'Uses your locally scraped data when available for speed.',
+      title: 'Neon-backed library',
+      description: 'Synced into Neon so your PYQs are always stored and ready to browse.',
     },
   ];
 
@@ -365,7 +365,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
         </button>
         <div className="pyp-header-title">
           <h1>Past Year Questions</h1>
-          <span className="pyp-paper-count">Browse JEE PYQs by exam, subject, and chapter</span>
+          <span className="pyp-paper-count">Browse JEE PYQs stored in Neon by exam, subject, and chapter</span>
         </div>
       </div>
 
