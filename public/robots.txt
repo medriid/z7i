@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /
+
+Disallow: /dashboard
+Disallow: /bookmarks
+Disallow: /forum
+Disallow: /pyp
+Disallow: /time-intel
+Disallow: /owner
+Disallow: /ai-chats
+
+Sitemap: https://z7i.vercel.app/sitemap.xml
