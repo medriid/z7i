@@ -1,4 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { prisma } from './lib/prisma.js';
+import { verifyToken } from './lib/auth.js';
 
 const CATALOG_URL = 'https://raw.githubusercontent.com/medriid/pyq/main/catalog.json';
 const RAW_BASE = 'https://raw.githubusercontent.com/medriid/pyq/main/';
@@ -47,8 +49,14 @@ const chapterQuestionsCache = new Map<string, CacheEntry<any[]>>();
 function setCorsHeaders(res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+}
+
+function getAuth(req: VercelRequest) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  return verifyToken(authHeader.substring(7));
 }
 
 function getRequiredQuery(req: VercelRequest, key: string): string | null {
@@ -85,7 +93,8 @@ function applyWatermarkProxy(url: string) {
 function normalizeAssetHtml(html: string | undefined, assetBase: string) {
   if (!html) return '';
   const withBase = html.replace(/src=(["'])assets[\\/]/g, `src=$1${assetBase}assets/`);
-  return withBase.replace(/src=(["'])(https?:\\/\\/[^\"']+)/g, (_match, quote, src) => {
+  const assetRegex = /src=(["'])(https?:\/\/[^"']+)/g;
+  return withBase.replace(assetRegex, (_match: string, quote: string, src: string) => {
     return `src=${quote}${applyWatermarkProxy(src)}`;
   });
 }
@@ -240,6 +249,57 @@ async function handleQuestions(req: VercelRequest, res: VercelResponse) {
   return res.status(200).json({ success: true, data: { items: sorted } });
 }
 
+async function handleSaveAttempt(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'Authentication required' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const {
+    questionId,
+    examId,
+    subjectId,
+    chapterId,
+    questionNumber,
+    selectedOptionIndex,
+    answerLabel,
+    correctAnswer,
+    isCorrect,
+  } = req.body as {
+    questionId?: string;
+    examId?: string;
+    subjectId?: string;
+    chapterId?: string;
+    questionNumber?: number;
+    selectedOptionIndex?: number;
+    answerLabel?: string;
+    correctAnswer?: string;
+    isCorrect?: boolean | null;
+  };
+
+  if (!questionId) {
+    return res.status(400).json({ error: 'questionId is required' });
+  }
+
+  const attempt = await prisma.pyqQuestionAttempt.create({
+    data: {
+      userId: payload.userId,
+      questionId,
+      examId: examId || null,
+      subjectId: subjectId || null,
+      chapterId: chapterId || null,
+      questionNumber: typeof questionNumber === 'number' ? questionNumber : null,
+      selectedOptionIndex: typeof selectedOptionIndex === 'number' ? selectedOptionIndex : null,
+      answerLabel: answerLabel || null,
+      correctAnswer: correctAnswer || null,
+      isCorrect: typeof isCorrect === 'boolean' ? isCorrect : null,
+    },
+  });
+
+  return res.status(201).json({ success: true, attempt: { id: attempt.id, createdAt: attempt.createdAt } });
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCorsHeaders(res);
 
@@ -259,6 +319,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return await handleChapters(req, res);
       case 'questions':
         return await handleQuestions(req, res);
+      case 'save-attempt':
+        return await handleSaveAttempt(req, res);
       default:
         return res.status(400).json({ error: 'Unknown action' });
     }
