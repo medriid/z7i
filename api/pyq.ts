@@ -3,6 +3,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 const CATALOG_URL = 'https://raw.githubusercontent.com/medriid/pyq/main/catalog.json';
 const RAW_BASE = 'https://raw.githubusercontent.com/medriid/pyq/main/';
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const WATERMARK_REMOVER_PROXY = process.env.WATERMARK_REMOVER_PROXY?.trim();
 
 type CatalogChapter = {
   name: string;
@@ -76,16 +77,24 @@ function displayName(name: string, display?: string | null) {
   return slugToTitle(name);
 }
 
+function applyWatermarkProxy(url: string) {
+  if (!WATERMARK_REMOVER_PROXY) return url;
+  return `${WATERMARK_REMOVER_PROXY}${encodeURIComponent(url)}`;
+}
+
 function normalizeAssetHtml(html: string | undefined, assetBase: string) {
   if (!html) return '';
-  return html.replace(/src=(["'])assets[\\/]/g, `src=$1${assetBase}assets/`);
+  const withBase = html.replace(/src=(["'])assets[\\/]/g, `src=$1${assetBase}assets/`);
+  return withBase.replace(/src=(["'])(https?:\\/\\/[^\"']+)/g, (_match, quote, src) => {
+    return `src=${quote}${applyWatermarkProxy(src)}`;
+  });
 }
 
 function buildAssetUrl(assetBase: string, assetPath: string | undefined) {
   if (!assetPath) return '';
   const normalized = assetPath.replace(/\\/g, '/');
-  if (normalized.startsWith('http')) return normalized;
-  return `${assetBase}${normalized}`;
+  const resolved = normalized.startsWith('http') ? normalized : `${assetBase}${normalized}`;
+  return applyWatermarkProxy(resolved);
 }
 
 function buildQuestionHtml(text: string | undefined, image: string | undefined, assetBase: string) {
