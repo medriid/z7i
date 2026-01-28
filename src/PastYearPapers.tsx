@@ -19,6 +19,7 @@ const PYQ_API = {
     `/api/pyq?action=chapters&examId=${encodeURIComponent(examId)}&subjectId=${encodeURIComponent(subjectId)}`,
   questions: (examId: string, subjectId: string, chapterId: string) =>
     `/api/pyq?action=questions&examId=${encodeURIComponent(examId)}&subjectId=${encodeURIComponent(subjectId)}&chapterId=${encodeURIComponent(chapterId)}`,
+  saveAttempt: '/api/pyq?action=save-attempt',
 };
 
 type Step = 'category' | 'exam' | 'subject' | 'chapter' | 'questions';
@@ -42,7 +43,6 @@ interface QuestionItem {
   options: string[];
   answer?: string;
   solutionHtml?: string;
-  pyqInfo?: string;
 }
 
 const CATEGORY_CONFIG: Array<{
@@ -197,7 +197,6 @@ function normalizeQuestion(raw: any, index: number): QuestionItem {
     options: getOptions(raw),
     answer: coerceString(raw?.correctAnswer ?? raw?.answer ?? raw?.solution ?? ''),
     solutionHtml: coerceString(raw?.solutionHtml ?? raw?.solution_html ?? ''),
-    pyqInfo: coerceString(raw?.pyqInfo ?? raw?.pyq_info ?? ''),
   };
 }
 
@@ -215,6 +214,21 @@ async function fetchPyq(url: string) {
   throw new Error(
     `PYQ returned non-JSON response. ${preview ? `Preview: ${preview}` : 'No response body.'}`
   );
+}
+
+async function savePyqAttempt(token: string, payload: Record<string, unknown>) {
+  const res = await fetch(PYQ_API.saveAttempt, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to save attempt (${res.status})`);
+  }
+  return res.json();
 }
 
 interface PastYearPapersProps {
@@ -398,6 +412,23 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
       correctIndexes.length > 0 ? correctIndexes.includes(selectedIndex) : null;
     setSubmittedAnswers((prev) => ({ ...prev, [question.id]: true }));
     setAnswerResults((prev) => ({ ...prev, [question.id]: isCorrect }));
+    const token = localStorage.getItem('token');
+    if (token) {
+      const answerLabel = String.fromCharCode(65 + selectedIndex);
+      savePyqAttempt(token, {
+        questionId: question.id,
+        examId: selectedExam?.id ?? null,
+        subjectId: selectedSubject?.id ?? null,
+        chapterId: selectedChapter?.id ?? null,
+        questionNumber: question.number,
+        selectedOptionIndex: selectedIndex,
+        answerLabel,
+        correctAnswer: question.answer ?? null,
+        isCorrect,
+      }).catch((error) => {
+        console.error('Failed to save PYQ attempt:', error);
+      });
+    }
   };
 
   const toggleSolution = (questionId: string) => {
@@ -609,7 +640,6 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                   <span className="pyp-question-num">Q{question.number}</span>
                   {question.subject && <span className="pyp-question-subject">{question.subject}</span>}
                   {question.type && <span className="pyp-question-type">{question.type}</span>}
-                  {question.pyqInfo && <span className="pyp-question-meta">{question.pyqInfo}</span>}
                 </div>
                 <div
                   className="pyp-question-html invert-images"

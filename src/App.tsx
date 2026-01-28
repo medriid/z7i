@@ -7828,10 +7828,10 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
     
     const lastSync = new Date(user.lastSyncAt).getTime();
     const now = Date.now();
-    const oneHour = 60 * 60 * 1000; // 1 hour in milliseconds
+    const twoHours = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
     
-    if (now - lastSync > oneHour) {
-      console.log('Auto-syncing: last sync was over 1 hour ago');
+    if (now - lastSync > twoHours) {
+      console.log('Auto-syncing: last sync was over 2 hours ago');
       handleSync();
     }
   }, [user.z7iLinked, user.lastSyncAt]); // Only run on mount and when user changes
@@ -7851,14 +7851,11 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
           currentTest: undefined
         });
         setMessage(`Synced ${data.stats.tests} tests with ${data.stats.questions} questions`);
-        loadTests();
+        await loadTests();
         const userData = await apiRequest('/auth?action=me');
         if (userData.success) {
           onUserUpdate(userData.user);
         }
-        setTimeout(() => {
-          window.location.reload();
-        }, 1200);
       } else {
         setSyncProgress({ status: `Sync failed: ${data.error}`, current: 0, total: 0 });
         setMessage(`Sync failed: ${data.error}`);

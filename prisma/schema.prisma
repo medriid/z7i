@@ -36,6 +36,7 @@ model User {
 
   customTestsCreated CustomTest[] @relation("CustomTestsCreated")
   customTestAttempts CustomTestAttempt[]
+  pyqQuestionAttempts PyqQuestionAttempt[]
 }
 
 model Session {
@@ -624,4 +625,23 @@ model PYPNote {
   updatedAt       DateTime  @updatedAt
   
   @@unique([userId, questionId])
+}
+
+model PyqQuestionAttempt {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId          String
+  examId              String?
+  subjectId           String?
+  chapterId           String?
+  questionNumber      Int?
+  selectedOptionIndex Int?
+  answerLabel         String?
+  correctAnswer       String?
+  isCorrect           Boolean?
+  createdAt           DateTime @default(now())
+
+  @@index([userId, questionId])
+  @@index([userId, createdAt])
 }

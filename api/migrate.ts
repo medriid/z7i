@@ -533,6 +533,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     `;
 
     await sql`
+      CREATE TABLE IF NOT EXISTS "PyqQuestionAttempt" (
+        "id" TEXT PRIMARY KEY,
+        "userId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+        "questionId" TEXT NOT NULL,
+        "examId" TEXT,
+        "subjectId" TEXT,
+        "chapterId" TEXT,
+        "questionNumber" INTEGER,
+        "selectedOptionIndex" INTEGER,
+        "answerLabel" TEXT,
+        "correctAnswer" TEXT,
+        "isCorrect" BOOLEAN,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+
+    await sql`
       CREATE TABLE IF NOT EXISTS "CustomTest" (
         "id" TEXT PRIMARY KEY,
         "name" TEXT NOT NULL,
@@ -620,6 +637,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await sql`CREATE INDEX IF NOT EXISTS "PYPQuestion_subject_idx" ON "PYPQuestion"("subject")`;
     await sql`CREATE INDEX IF NOT EXISTS "PYPAttempt_userId_idx" ON "PYPAttempt"("userId")`;
     await sql`CREATE INDEX IF NOT EXISTS "PYPAttempt_paperId_idx" ON "PYPAttempt"("paperId")`;
+    await sql`CREATE INDEX IF NOT EXISTS "PyqQuestionAttempt_userId_idx" ON "PyqQuestionAttempt"("userId")`;
+    await sql`CREATE INDEX IF NOT EXISTS "PyqQuestionAttempt_userId_questionId_idx" ON "PyqQuestionAttempt"("userId", "questionId")`;
 
     await sql`ALTER TABLE "PYPAttempt" ADD COLUMN IF NOT EXISTS "topicStats" JSONB`;
     await sql`ALTER TABLE "PYPAttempt" ADD COLUMN IF NOT EXISTS "revisionRecommendations" JSONB`;
@@ -627,7 +646,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({ 
       success: true, 
       message: 'Database migrated successfully!',
-      tables: ['User', 'Session', 'AiChatPersonalityConfig', 'AiChatSession', 'AiChatMessage', 'Z7iAccount', 'Package', 'Test', 'TestAttempt', 'QuestionResponse', 'QuestionBookmark', 'QuestionNote', 'QuestionComment', 'BonusQuestion', 'AnswerKeyChange', 'TestRevision', 'RevisionResponse', 'ScoreAdjustment', 'ForumPost', 'ForumReply', 'ForumPostLike', 'ForumReplyLike', 'PastYearPaper', 'PYPQuestion', 'PYPAttempt', 'PYPBookmark', 'PYPNote', 'CustomTest', 'CustomTestQuestion', 'CustomTestAttempt', 'CustomTestResponse']
+      tables: ['User', 'Session', 'AiChatPersonalityConfig', 'AiChatSession', 'AiChatMessage', 'Z7iAccount', 'Package', 'Test', 'TestAttempt', 'QuestionResponse', 'QuestionBookmark', 'QuestionNote', 'QuestionComment', 'BonusQuestion', 'AnswerKeyChange', 'TestRevision', 'RevisionResponse', 'ScoreAdjustment', 'ForumPost', 'ForumReply', 'ForumPostLike', 'ForumReplyLike', 'PastYearPaper', 'PYPQuestion', 'PYPAttempt', 'PYPBookmark', 'PYPNote', 'PyqQuestionAttempt', 'CustomTest', 'CustomTestQuestion', 'CustomTestAttempt', 'CustomTestResponse']
     });
 
   } catch (error) {
