@@ -1,5 +1,15 @@
 import { useMemo, useState } from 'react';
-import { ChevronLeft, BookOpen, Layers, ListChecks, Loader2, Search } from 'lucide-react';
+import {
+  ChevronLeft,
+  BookOpen,
+  ClipboardCheck,
+  GraduationCap,
+  Layers,
+  ListChecks,
+  Loader2,
+  PenSquare,
+  Search,
+} from 'lucide-react';
 import { renderLatexInHtml } from './utils/latex';
 
 const PYQ_API = {
@@ -63,6 +73,16 @@ const CATEGORY_CONFIG: Array<{
     icon: ListChecks,
     matches: (name) => !name.includes('advanced') && !name.includes('main'),
   },
+];
+
+const EXAM_ICON_CONFIG: Array<{
+  matches: (name: string) => boolean;
+  icon: typeof BookOpen;
+}> = [
+  { matches: (name) => name.includes('advanced'), icon: GraduationCap },
+  { matches: (name) => name.includes('main'), icon: ClipboardCheck },
+  { matches: (name) => name.includes('neet'), icon: BookOpen },
+  { matches: (name) => name.includes('bitsat'), icon: PenSquare },
 ];
 
 function extractArray(payload: unknown, keys: string[]): any[] {
@@ -136,6 +156,32 @@ function getOptions(raw: any): string[] {
   return [];
 }
 
+function getCorrectOptionIndexes(answer: string | undefined, optionCount: number): number[] {
+  if (!answer) return [];
+  const normalized = answer.toUpperCase();
+  const letterMatches = normalized.match(/[A-D]/g) ?? [];
+  const numberMatches = normalized.match(/\b[1-4]\b/g) ?? [];
+  const indexes = new Set<number>();
+
+  letterMatches.forEach((letter) => {
+    const index = letter.charCodeAt(0) - 65;
+    if (index >= 0 && index < optionCount) indexes.add(index);
+  });
+
+  numberMatches.forEach((value) => {
+    const index = Number(value) - 1;
+    if (index >= 0 && index < optionCount) indexes.add(index);
+  });
+
+  return Array.from(indexes);
+}
+
+function formatCorrectAnswer(answer: string | undefined, optionCount: number): string {
+  const indexes = getCorrectOptionIndexes(answer, optionCount);
+  if (indexes.length === 0) return answer ?? '';
+  return indexes.map((index) => String.fromCharCode(65 + index)).join(', ');
+}
+
 function normalizeQuestion(raw: any, index: number): QuestionItem {
   const id = extractId(raw) || `${index + 1}`;
   const number = raw?.questionNumber ?? raw?.question_number ?? raw?.sequence ?? index + 1;
@@ -188,21 +234,10 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-
-  const highlights = [
-    {
-      title: 'Chapter-wise coverage',
-      description: 'Jump straight into chapters and track question counts instantly.',
-    },
-    {
-      title: 'Clean, focused view',
-      description: 'Distraction-free PYQ practice with consistent formatting.',
-    },
-    {
-      title: 'GitHub-powered library',
-      description: 'Pulled from the open PYQ repository so new questions appear quickly.',
-    },
-  ];
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number | null>>({});
+  const [submittedAnswers, setSubmittedAnswers] = useState<Record<string, boolean>>({});
+  const [answerResults, setAnswerResults] = useState<Record<string, boolean | null>>({});
+  const [expandedSolutions, setExpandedSolutions] = useState<Record<string, boolean>>({});
 
   const activeCategory = CATEGORY_CONFIG.find((item) => item.key === category) ?? null;
 
@@ -222,6 +257,12 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
   }, [chapters, search]);
 
   const resetSearch = () => setSearch('');
+  const resetPracticeState = () => {
+    setSelectedAnswers({});
+    setSubmittedAnswers({});
+    setAnswerResults({});
+    setExpandedSolutions({});
+  };
 
   const loadExams = async (categoryKey: CategoryKey) => {
     setLoading(true);
@@ -305,6 +346,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     setSubjects([]);
     setChapters([]);
     setQuestions([]);
+    resetPracticeState();
     await loadExams(key);
   };
 
@@ -317,6 +359,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     setSubjects([]);
     setChapters([]);
     setQuestions([]);
+    resetPracticeState();
     await loadSubjects(exam);
   };
 
@@ -328,6 +371,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     setSelectedChapter(null);
     setChapters([]);
     setQuestions([]);
+    resetPracticeState();
     await loadChapters(selectedExam, subject);
   };
 
@@ -337,7 +381,32 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     setStep('questions');
     resetSearch();
     setQuestions([]);
+    resetPracticeState();
     await loadQuestions(selectedExam, selectedSubject, chapter);
+  };
+
+  const handleOptionSelect = (questionId: string, index: number) => {
+    if (submittedAnswers[questionId]) return;
+    setSelectedAnswers((prev) => ({ ...prev, [questionId]: index }));
+  };
+
+  const handleSubmitAnswer = (question: QuestionItem) => {
+    const selectedIndex = selectedAnswers[question.id];
+    if (selectedIndex === null || selectedIndex === undefined) return;
+    const correctIndexes = getCorrectOptionIndexes(question.answer, question.options.length);
+    const isCorrect =
+      correctIndexes.length > 0 ? correctIndexes.includes(selectedIndex) : null;
+    setSubmittedAnswers((prev) => ({ ...prev, [question.id]: true }));
+    setAnswerResults((prev) => ({ ...prev, [question.id]: isCorrect }));
+  };
+
+  const toggleSolution = (questionId: string) => {
+    setExpandedSolutions((prev) => ({ ...prev, [questionId]: !prev[questionId] }));
+  };
+
+  const getExamIcon = (examName: string) => {
+    const normalized = examName.toLowerCase();
+    return EXAM_ICON_CONFIG.find((config) => config.matches(normalized))?.icon ?? null;
   };
 
   const handleBack = () => {
@@ -370,25 +439,6 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
         <div className="pyp-header-title">
           <h1>Past Year Questions</h1>
           <span className="pyp-paper-count">Browse PYQs from the GitHub library by exam, subject, and chapter</span>
-        </div>
-      </div>
-
-      <div className="pyp-hero">
-        <div className="pyp-hero-content">
-          <span className="pyp-hero-badge">PYQ Library • JEE Focused</span>
-          <h2>Find the exact questions you need in minutes.</h2>
-          <p>
-            Move from exam → subject → chapter to unlock precise question sets with clear labels,
-            instant filtering, and smoother navigation pulled directly from GitHub.
-          </p>
-        </div>
-        <div className="pyp-hero-cards">
-          {highlights.map((highlight) => (
-            <div key={highlight.title} className="pyp-hero-card">
-              <h3>{highlight.title}</h3>
-              <p>{highlight.description}</p>
-            </div>
-          ))}
         </div>
       </div>
 
@@ -469,9 +519,21 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
             </div>
           ) : (
             filteredExams.map((exam) => (
-              <button key={exam.id} className="pyp-item-card" onClick={() => handleExamSelect(exam)}>
-                <h3>{exam.name}</h3>
-                <span className="pyp-item-meta">Tap to view subjects</span>
+              <button
+                key={exam.id}
+                className="pyp-item-card pyp-exam-card"
+                onClick={() => handleExamSelect(exam)}
+              >
+                <span className={`pyp-item-icon ${getExamIcon(exam.name) ? '' : 'is-empty'}`}>
+                  {(() => {
+                    const Icon = getExamIcon(exam.name);
+                    return Icon ? <Icon size={22} /> : null;
+                  })()}
+                </span>
+                <div className="pyp-item-content">
+                  <h3>{exam.name}</h3>
+                  <span className="pyp-item-meta">Tap to view subjects</span>
+                </div>
               </button>
             ))
           )}
@@ -517,7 +579,15 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
       )}
 
       {!loading && !error && step === 'questions' && (
-        <div className="pyp-questions">
+        <div className="pyp-practice-panel">
+          <div className="pyp-practice-header">
+            <div>
+              <span className="pyp-practice-badge">Practice mode</span>
+              <h2>{selectedChapter?.name ?? 'Questions'}</h2>
+              <p>{questions.length} questions • Submit answers to see instant feedback</p>
+            </div>
+          </div>
+          <div className="pyp-questions">
           {questions.length === 0 ? (
             <div className="pyp-empty">
               <p>No questions found.</p>
@@ -526,6 +596,15 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
           ) : (
             questions.map((question) => (
               <div key={question.id} className="pyp-question-card">
+                {(() => {
+                  const selectedIndex = selectedAnswers[question.id];
+                  const isSubmitted = submittedAnswers[question.id];
+                  const result = answerResults[question.id];
+                  const correctIndexes = getCorrectOptionIndexes(question.answer, question.options.length);
+                  const hasCorrectAnswer = correctIndexes.length > 0;
+                  const correctAnswerLabel = formatCorrectAnswer(question.answer, question.options.length);
+                  return (
+                    <>
                 <div className="pyp-question-header">
                   <span className="pyp-question-num">Q{question.number}</span>
                   {question.subject && <span className="pyp-question-subject">{question.subject}</span>}
@@ -533,37 +612,94 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                   {question.pyqInfo && <span className="pyp-question-meta">{question.pyqInfo}</span>}
                 </div>
                 <div
-                  className="pyp-question-html"
+                  className="pyp-question-html invert-images"
                   dangerouslySetInnerHTML={{ __html: renderLatexInHtml(question.questionHtml) }}
                 />
                 {question.options.length > 0 && (
                   <div className="pyp-question-options">
                     {question.options.map((option, index) => (
-                      <div key={`${question.id}-opt-${index}`} className="pyp-question-option">
+                      <button
+                        key={`${question.id}-opt-${index}`}
+                        className={[
+                          'pyp-question-option',
+                          selectedIndex === index ? 'selected' : '',
+                          isSubmitted && correctIndexes.includes(index) ? 'correct' : '',
+                          isSubmitted && selectedIndex === index && !correctIndexes.includes(index)
+                            ? 'incorrect'
+                            : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                        type="button"
+                        onClick={() => handleOptionSelect(question.id, index)}
+                        disabled={isSubmitted}
+                      >
                         <span className="pyp-option-label">{String.fromCharCode(65 + index)}</span>
                         <span
-                          className="pyp-option-content"
+                          className="pyp-option-content invert-images"
                           dangerouslySetInnerHTML={{ __html: renderLatexInHtml(option) }}
                         />
-                      </div>
+                      </button>
                     ))}
                   </div>
                 )}
-                {question.answer && (
-                  <div className="pyp-question-answer">Answer: {question.answer}</div>
+                <div className="pyp-question-actions">
+                  <button
+                    className="pyp-submit-answer"
+                    type="button"
+                    onClick={() => handleSubmitAnswer(question)}
+                    disabled={isSubmitted || selectedIndex === null || selectedIndex === undefined}
+                  >
+                    Submit answer
+                  </button>
+                  {isSubmitted && question.solutionHtml && (
+                    <button
+                      className="pyp-solution-toggle"
+                      type="button"
+                      onClick={() => toggleSolution(question.id)}
+                    >
+                      {expandedSolutions[question.id] ? 'Hide solution' : 'View solution'}
+                    </button>
+                  )}
+                </div>
+                {isSubmitted && (
+                  <div
+                    className={[
+                      'pyp-question-feedback',
+                      result === true ? 'correct' : '',
+                      result === false ? 'incorrect' : '',
+                      result === null ? 'neutral' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                  >
+                    {result === true && 'Correct!'}
+                    {result === false && 'Incorrect.'}
+                    {result === null && 'Answer submitted.'}
+                    {hasCorrectAnswer && correctAnswerLabel && (
+                      <span>Correct answer: {correctAnswerLabel}</span>
+                    )}
+                  </div>
                 )}
-                {question.solutionHtml && (
+                {isSubmitted && expandedSolutions[question.id] && question.solutionHtml && (
                   <div className="pyp-question-solution">
                     <div className="pyp-question-solution-title">Solution</div>
                     <div
-                      className="pyp-question-solution-body"
+                      className="pyp-question-solution-body invert-images"
                       dangerouslySetInnerHTML={{ __html: renderLatexInHtml(question.solutionHtml) }}
                     />
                   </div>
                 )}
+                {!question.solutionHtml && isSubmitted && question.answer && (
+                  <div className="pyp-question-answer">Answer: {question.answer}</div>
+                )}
+                    </>
+                  );
+                })()}
               </div>
             ))
           )}
+          </div>
         </div>
       )}
     </div>
