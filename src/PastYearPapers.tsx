@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ChevronLeft,
+  ChevronRight,
   BookOpen,
   ClipboardCheck,
   GraduationCap,
@@ -20,6 +21,7 @@ const PYQ_API = {
   questions: (examId: string, subjectId: string, chapterId: string) =>
     `/api/pyq?action=questions&examId=${encodeURIComponent(examId)}&subjectId=${encodeURIComponent(subjectId)}&chapterId=${encodeURIComponent(chapterId)}`,
   saveAttempt: '/api/pyq?action=save-attempt',
+  attempts: '/api/pyq?action=attempts',
 };
 
 type Step = 'category' | 'exam' | 'subject' | 'chapter' | 'questions';
@@ -43,6 +45,16 @@ interface QuestionItem {
   options: string[];
   answer?: string;
   solutionHtml?: string;
+  pyqInfo?: string;
+}
+
+interface QuestionAttempt {
+  questionId: string;
+  selectedOptionIndex: number | null;
+  isCorrect: boolean | null;
+  answerLabel?: string | null;
+  correctAnswer?: string | null;
+  createdAt?: string;
 }
 
 const CATEGORY_CONFIG: Array<{
@@ -197,6 +209,7 @@ function normalizeQuestion(raw: any, index: number): QuestionItem {
     options: getOptions(raw),
     answer: coerceString(raw?.correctAnswer ?? raw?.answer ?? raw?.solution ?? ''),
     solutionHtml: coerceString(raw?.solutionHtml ?? raw?.solution_html ?? ''),
+    pyqInfo: coerceString(raw?.pyqInfo ?? raw?.pyq_info ?? ''),
   };
 }
 
@@ -231,6 +244,42 @@ async function savePyqAttempt(token: string, payload: Record<string, unknown>) {
   return res.json();
 }
 
+async function fetchPyqAttempts(token: string, payload: Record<string, unknown>) {
+  const res = await fetch(PYQ_API.attempts, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch attempts (${res.status})`);
+  }
+  return res.json();
+}
+
+function formatDuration(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+function parsePyqInfo(info: string) {
+  if (!info) return { year: undefined, date: undefined, shift: undefined };
+  const yearMatch = info.match(/20\d{2}/);
+  const shiftMatch = info.match(/shift\s*([1-3])/i);
+  const dateMatch =
+    info.match(/\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b/) ||
+    info.match(/\b\d{1,2}\s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s*\d{2,4}\b/i);
+
+  return {
+    year: yearMatch?.[0],
+    date: dateMatch?.[0],
+    shift: shiftMatch ? `Shift ${shiftMatch[1]}` : undefined,
+  };
+}
+
 interface PastYearPapersProps {
   onBack?: () => void;
 }
@@ -251,7 +300,9 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number | null>>({});
   const [submittedAnswers, setSubmittedAnswers] = useState<Record<string, boolean>>({});
   const [answerResults, setAnswerResults] = useState<Record<string, boolean | null>>({});
-  const [expandedSolutions, setExpandedSolutions] = useState<Record<string, boolean>>({});
+  const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
+  const [questionTimes, setQuestionTimes] = useState<Record<string, number>>({});
+  const [attemptsLoading, setAttemptsLoading] = useState(false);
 
   const activeCategory = CATEGORY_CONFIG.find((item) => item.key === category) ?? null;
 
@@ -275,7 +326,9 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     setSelectedAnswers({});
     setSubmittedAnswers({});
     setAnswerResults({});
-    setExpandedSolutions({});
+    setActiveQuestionId(null);
+    setQuestionTimes({});
+    setAttemptsLoading(false);
   };
 
   const loadExams = async (categoryKey: CategoryKey) => {
@@ -343,6 +396,37 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
       const list = extractArray(data, ['questions', 'data', 'items']);
       const normalized = list.map((item, index) => normalizeQuestion(item, index));
       setQuestions(normalized);
+      setActiveQuestionId(normalized[0]?.id ?? null);
+      setQuestionTimes(
+        normalized.reduce<Record<string, number>>((acc, question) => {
+          acc[question.id] = 0;
+          return acc;
+        }, {})
+      );
+      const token = localStorage.getItem('token');
+      if (token && normalized.length > 0) {
+        setAttemptsLoading(true);
+        try {
+          const attemptData = await fetchPyqAttempts(token, { questionIds: normalized.map((q) => q.id) });
+          const attempts = extractArray(attemptData, ['attempts', 'data', 'items']) as QuestionAttempt[];
+          const selected: Record<string, number | null> = {};
+          const submitted: Record<string, boolean> = {};
+          const results: Record<string, boolean | null> = {};
+          attempts.forEach((attempt) => {
+            if (typeof attempt.selectedOptionIndex !== 'number') return;
+            selected[attempt.questionId] = attempt.selectedOptionIndex;
+            submitted[attempt.questionId] = true;
+            results[attempt.questionId] = typeof attempt.isCorrect === 'boolean' ? attempt.isCorrect : null;
+          });
+          setSelectedAnswers((prev) => ({ ...prev, ...selected }));
+          setSubmittedAnswers((prev) => ({ ...prev, ...submitted }));
+          setAnswerResults((prev) => ({ ...prev, ...results }));
+        } catch (attemptError) {
+          console.error('Failed to fetch PYQ attempts:', attemptError);
+        } finally {
+          setAttemptsLoading(false);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load questions');
     } finally {
@@ -431,10 +515,6 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     }
   };
 
-  const toggleSolution = (questionId: string) => {
-    setExpandedSolutions((prev) => ({ ...prev, [questionId]: !prev[questionId] }));
-  };
-
   const getExamIcon = (examName: string) => {
     const normalized = examName.toLowerCase();
     return EXAM_ICON_CONFIG.find((config) => config.matches(normalized))?.icon ?? null;
@@ -460,6 +540,22 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     }
     if (onBack) onBack();
   };
+
+  useEffect(() => {
+    if (!activeQuestionId) return;
+    if (submittedAnswers[activeQuestionId]) return;
+    const interval = window.setInterval(() => {
+      setQuestionTimes((prev) => ({
+        ...prev,
+        [activeQuestionId]: (prev[activeQuestionId] ?? 0) + 1,
+      }));
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [activeQuestionId, submittedAnswers]);
+
+  const activeQuestionIndex = questions.findIndex((question) => question.id === activeQuestionId);
+  const activeQuestion =
+    questions.find((question) => question.id === activeQuestionId) ?? questions[0] ?? null;
 
   return (
     <div className="pyp-page pyp-pyq">
@@ -617,119 +713,234 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
               <h2>{selectedChapter?.name ?? 'Questions'}</h2>
               <p>{questions.length} questions • Submit answers to see instant feedback</p>
             </div>
+            <div className="pyp-practice-meta">
+              <span>
+                {activeQuestionIndex >= 0 ? activeQuestionIndex + 1 : 0}/{questions.length}
+              </span>
+              {attemptsLoading && <span className="pyp-practice-sync">Syncing attempts…</span>}
+            </div>
           </div>
-          <div className="pyp-questions">
           {questions.length === 0 ? (
             <div className="pyp-empty">
               <p>No questions found.</p>
               <p className="pyp-empty-hint">Try another chapter or refresh.</p>
             </div>
           ) : (
-            questions.map((question) => (
-              <div key={question.id} className="pyp-question-card">
-                {(() => {
-                  const selectedIndex = selectedAnswers[question.id];
-                  const isSubmitted = submittedAnswers[question.id];
-                  const result = answerResults[question.id];
-                  const correctIndexes = getCorrectOptionIndexes(question.answer, question.options.length);
-                  const hasCorrectAnswer = correctIndexes.length > 0;
-                  const correctAnswerLabel = formatCorrectAnswer(question.answer, question.options.length);
-                  return (
-                    <>
-                <div className="pyp-question-header">
-                  <span className="pyp-question-num">Q{question.number}</span>
-                  {question.subject && <span className="pyp-question-subject">{question.subject}</span>}
-                  {question.type && <span className="pyp-question-type">{question.type}</span>}
+            <div className="pyp-practice-layout">
+              <aside className="pyp-question-list">
+                <div className="pyp-question-list-header">
+                  <span>Questions</span>
+                  <span className="pyp-question-list-count">{questions.length}</span>
                 </div>
-                <div
-                  className="pyp-question-html invert-images"
-                  dangerouslySetInnerHTML={{ __html: renderLatexInHtml(question.questionHtml) }}
-                />
-                {question.options.length > 0 && (
-                  <div className="pyp-question-options">
-                    {question.options.map((option, index) => (
+                <div className="pyp-question-list-items">
+                  {questions.map((question) => {
+                    const selectedIndex = selectedAnswers[question.id];
+                    const isSubmitted = submittedAnswers[question.id];
+                    const result = answerResults[question.id];
+                    const status =
+                      isSubmitted && result === true
+                        ? 'correct'
+                        : isSubmitted && result === false
+                          ? 'incorrect'
+                          : isSubmitted
+                            ? 'submitted'
+                            : selectedIndex !== null && selectedIndex !== undefined
+                              ? 'in-progress'
+                              : 'unattempted';
+                    return (
                       <button
-                        key={`${question.id}-opt-${index}`}
+                        key={question.id}
                         className={[
-                          'pyp-question-option',
-                          selectedIndex === index ? 'selected' : '',
-                          isSubmitted && correctIndexes.includes(index) ? 'correct' : '',
-                          isSubmitted && selectedIndex === index && !correctIndexes.includes(index)
-                            ? 'incorrect'
-                            : '',
+                          'pyp-question-list-item',
+                          status,
+                          question.id === activeQuestion?.id ? 'active' : '',
                         ]
                           .filter(Boolean)
                           .join(' ')}
+                        onClick={() => setActiveQuestionId(question.id)}
                         type="button"
-                        onClick={() => handleOptionSelect(question.id, index)}
-                        disabled={isSubmitted}
                       >
-                        <span className="pyp-option-label">{String.fromCharCode(65 + index)}</span>
-                        <span
-                          className="pyp-option-content invert-images"
-                          dangerouslySetInnerHTML={{ __html: renderLatexInHtml(option) }}
-                        />
+                        <span className="pyp-question-list-num">Q{question.number}</span>
+                        <span className="pyp-question-list-status">{status.replace('-', ' ')}</span>
                       </button>
-                    ))}
-                  </div>
-                )}
-                <div className="pyp-question-actions">
-                  <button
-                    className="pyp-submit-answer"
-                    type="button"
-                    onClick={() => handleSubmitAnswer(question)}
-                    disabled={isSubmitted || selectedIndex === null || selectedIndex === undefined}
-                  >
-                    Submit answer
-                  </button>
-                  {isSubmitted && question.solutionHtml && (
-                    <button
-                      className="pyp-solution-toggle"
-                      type="button"
-                      onClick={() => toggleSolution(question.id)}
-                    >
-                      {expandedSolutions[question.id] ? 'Hide solution' : 'View solution'}
-                    </button>
-                  )}
+                    );
+                  })}
                 </div>
-                {isSubmitted && (
-                  <div
-                    className={[
-                      'pyp-question-feedback',
-                      result === true ? 'correct' : '',
-                      result === false ? 'incorrect' : '',
-                      result === null ? 'neutral' : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' ')}
-                  >
-                    {result === true && 'Correct!'}
-                    {result === false && 'Incorrect.'}
-                    {result === null && 'Answer submitted.'}
-                    {hasCorrectAnswer && correctAnswerLabel && (
-                      <span>Correct answer: {correctAnswerLabel}</span>
-                    )}
-                  </div>
-                )}
-                {isSubmitted && expandedSolutions[question.id] && question.solutionHtml && (
-                  <div className="pyp-question-solution">
-                    <div className="pyp-question-solution-title">Solution</div>
-                    <div
-                      className="pyp-question-solution-body invert-images"
-                      dangerouslySetInnerHTML={{ __html: renderLatexInHtml(question.solutionHtml) }}
-                    />
-                  </div>
-                )}
-                {!question.solutionHtml && isSubmitted && question.answer && (
-                  <div className="pyp-question-answer">Answer: {question.answer}</div>
-                )}
-                    </>
+              </aside>
+              <section className="pyp-question-main">
+                {activeQuestion && (() => {
+                  const selectedIndex = selectedAnswers[activeQuestion.id];
+                  const isSubmitted = submittedAnswers[activeQuestion.id];
+                  const result = answerResults[activeQuestion.id];
+                  const correctIndexes = getCorrectOptionIndexes(activeQuestion.answer, activeQuestion.options.length);
+                  const hasCorrectAnswer = correctIndexes.length > 0;
+                  const correctAnswerLabel = formatCorrectAnswer(activeQuestion.answer, activeQuestion.options.length);
+                  const hasPrev = activeQuestionIndex > 0;
+                  const hasNext = activeQuestionIndex < questions.length - 1;
+                  return (
+                    <div className="pyp-question-card">
+                      <div className="pyp-question-header">
+                        <span className="pyp-question-num">Q{activeQuestion.number}</span>
+                        {activeQuestion.subject && <span className="pyp-question-subject">{activeQuestion.subject}</span>}
+                        {activeQuestion.type && <span className="pyp-question-type">{activeQuestion.type}</span>}
+                      </div>
+                      <div
+                        className="pyp-question-html invert-images"
+                        dangerouslySetInnerHTML={{ __html: renderLatexInHtml(activeQuestion.questionHtml) }}
+                      />
+                      {activeQuestion.options.length > 0 && (
+                        <div className="pyp-question-options">
+                          {activeQuestion.options.map((option, index) => (
+                            <button
+                              key={`${activeQuestion.id}-opt-${index}`}
+                              className={[
+                                'pyp-question-option',
+                                selectedIndex === index ? 'selected' : '',
+                                isSubmitted && correctIndexes.includes(index) ? 'correct' : '',
+                                isSubmitted && selectedIndex === index && !correctIndexes.includes(index)
+                                  ? 'incorrect'
+                                  : '',
+                              ]
+                                .filter(Boolean)
+                                .join(' ')}
+                              type="button"
+                              onClick={() => handleOptionSelect(activeQuestion.id, index)}
+                              disabled={isSubmitted}
+                            >
+                              <span className="pyp-option-label">{String.fromCharCode(65 + index)}</span>
+                              <span
+                                className="pyp-option-content invert-images"
+                                dangerouslySetInnerHTML={{ __html: renderLatexInHtml(option) }}
+                              />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="pyp-question-actions">
+                        <button
+                          className="pyp-submit-answer"
+                          type="button"
+                          onClick={() => handleSubmitAnswer(activeQuestion)}
+                          disabled={isSubmitted || selectedIndex === null || selectedIndex === undefined}
+                        >
+                          Submit answer
+                        </button>
+                        <div className="pyp-question-nav">
+                          <button
+                            className="pyp-nav-btn"
+                            type="button"
+                            onClick={() => setActiveQuestionId(questions[activeQuestionIndex - 1].id)}
+                            disabled={!hasPrev}
+                          >
+                            <ChevronLeft size={16} />
+                            Previous
+                          </button>
+                          <button
+                            className="pyp-nav-btn"
+                            type="button"
+                            onClick={() => setActiveQuestionId(questions[activeQuestionIndex + 1].id)}
+                            disabled={!hasNext}
+                          >
+                            Next
+                            <ChevronRight size={16} />
+                          </button>
+                        </div>
+                      </div>
+                      {isSubmitted && (
+                        <div
+                          className={[
+                            'pyp-question-feedback',
+                            result === true ? 'correct' : '',
+                            result === false ? 'incorrect' : '',
+                            result === null ? 'neutral' : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}
+                        >
+                          {result === true && 'Correct!'}
+                          {result === false && 'Incorrect.'}
+                          {result === null && 'Answer submitted.'}
+                          {hasCorrectAnswer && correctAnswerLabel && (
+                            <span>Correct answer: {correctAnswerLabel}</span>
+                          )}
+                        </div>
+                      )}
+                      {isSubmitted && activeQuestion.solutionHtml && (
+                        <div className="pyp-question-solution">
+                          <div className="pyp-question-solution-title">Solution</div>
+                          <div
+                            className="pyp-question-solution-body invert-images"
+                            dangerouslySetInnerHTML={{ __html: renderLatexInHtml(activeQuestion.solutionHtml) }}
+                          />
+                        </div>
+                      )}
+                      {!activeQuestion.solutionHtml && isSubmitted && activeQuestion.answer && (
+                        <div className="pyp-question-answer">Answer: {activeQuestion.answer}</div>
+                      )}
+                    </div>
                   );
                 })()}
-              </div>
-            ))
+              </section>
+              <aside className="pyp-question-meta-panel">
+                {activeQuestion && (() => {
+                  const meta = parsePyqInfo(activeQuestion.pyqInfo ?? '');
+                  const selectedIndex = selectedAnswers[activeQuestion.id];
+                  const isSubmitted = submittedAnswers[activeQuestion.id];
+                  const result = answerResults[activeQuestion.id];
+                  const correctAnswerLabel = formatCorrectAnswer(activeQuestion.answer, activeQuestion.options.length);
+                  const selectedLabel =
+                    selectedIndex !== null && selectedIndex !== undefined
+                      ? String.fromCharCode(65 + selectedIndex)
+                      : '—';
+                  const timeTaken = formatDuration(questionTimes[activeQuestion.id] ?? 0);
+                  return (
+                    <div className="pyp-meta-card">
+                      <h3>Question details</h3>
+                      <div className="pyp-meta-list">
+                        <div>
+                          <span>Year</span>
+                          <strong>{meta.year ?? '—'}</strong>
+                        </div>
+                        <div>
+                          <span>Date</span>
+                          <strong>{meta.date ?? '—'}</strong>
+                        </div>
+                        <div>
+                          <span>Shift</span>
+                          <strong>{meta.shift ?? '—'}</strong>
+                        </div>
+                        <div>
+                          <span>Your time</span>
+                          <strong>{timeTaken}</strong>
+                        </div>
+                        <div>
+                          <span>Avg time</span>
+                          <strong>—</strong>
+                        </div>
+                      </div>
+                      {activeQuestion.pyqInfo && (
+                        <div className="pyp-meta-info">
+                          <span>Paper</span>
+                          <p>{activeQuestion.pyqInfo}</p>
+                        </div>
+                      )}
+                      <div className="pyp-meta-analysis">
+                        <h4>Answer analysis</h4>
+                        {!isSubmitted && <p>Submit your answer to unlock analysis.</p>}
+                        {isSubmitted && (
+                          <div className="pyp-analysis-content">
+                            <span>{result === true ? 'Correct answer chosen.' : 'Answer needs review.'}</span>
+                            <span>Selected: {selectedLabel}</span>
+                            {correctAnswerLabel && <span>Correct: {correctAnswerLabel}</span>}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </aside>
+            </div>
           )}
-          </div>
         </div>
       )}
     </div>

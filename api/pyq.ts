@@ -300,6 +300,45 @@ async function handleSaveAttempt(req: VercelRequest, res: VercelResponse) {
   return res.status(201).json({ success: true, attempt: { id: attempt.id, createdAt: attempt.createdAt } });
 }
 
+async function handleAttempts(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'Authentication required' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { questionIds } = req.body as { questionIds?: string[] };
+  if (!Array.isArray(questionIds) || questionIds.length === 0) {
+    return res.status(400).json({ error: 'questionIds is required' });
+  }
+
+  const attempts = await prisma.pyqQuestionAttempt.findMany({
+    where: {
+      userId: payload.userId,
+      questionId: { in: questionIds },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const latestByQuestion = new Map<string, typeof attempts[number]>();
+  attempts.forEach((attempt) => {
+    if (!latestByQuestion.has(attempt.questionId)) {
+      latestByQuestion.set(attempt.questionId, attempt);
+    }
+  });
+
+  const latest = Array.from(latestByQuestion.values()).map((attempt) => ({
+    questionId: attempt.questionId,
+    selectedOptionIndex: attempt.selectedOptionIndex,
+    answerLabel: attempt.answerLabel,
+    correctAnswer: attempt.correctAnswer,
+    isCorrect: attempt.isCorrect,
+    createdAt: attempt.createdAt,
+  }));
+
+  return res.status(200).json({ success: true, attempts: latest });
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCorsHeaders(res);
 
@@ -321,6 +360,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return await handleQuestions(req, res);
       case 'save-attempt':
         return await handleSaveAttempt(req, res);
+      case 'attempts':
+        return await handleAttempts(req, res);
       default:
         return res.status(400).json({ error: 'Unknown action' });
     }
