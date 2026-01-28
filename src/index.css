@@ -12454,7 +12454,8 @@ body {
 }
 
 .pyp-question-type,
-.pyp-question-subject {
+.pyp-question-subject,
+.pyp-question-meta {
   font-size: 0.85rem;
   color: var(--text-muted);
   background: rgba(148, 163, 184, 0.15);
@@ -12486,6 +12487,26 @@ body {
   margin-top: 0.8rem;
   font-weight: 600;
   color: var(--success);
+}
+
+.pyp-question-solution {
+  margin-top: 0.8rem;
+  padding: 0.8rem;
+  border-radius: var(--radius-md);
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.pyp-question-solution-title {
+  font-weight: 600;
+  color: var(--primary);
+  margin-bottom: 0.4rem;
+}
+
+.pyp-question-solution-body img {
+  max-width: 100%;
+  border-radius: var(--radius-md);
+  margin-top: 0.5rem;
 }
 
 .pyp-question-media img {

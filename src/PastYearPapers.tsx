@@ -2,13 +2,13 @@ import { useMemo, useState } from 'react';
 import { ChevronLeft, BookOpen, Layers, ListChecks, Loader2, Search } from 'lucide-react';
 import { renderLatexInHtml } from './utils/latex';
 
-const MARKS_API = {
-  exams: '/marks?action=exams',
-  subjects: (examId: string) => `/marks?action=subjects&examId=${encodeURIComponent(examId)}`,
+const PYQ_API = {
+  exams: '/api/pyq?action=exams',
+  subjects: (examId: string) => `/api/pyq?action=subjects&examId=${encodeURIComponent(examId)}`,
   chapters: (examId: string, subjectId: string) =>
-    `/marks?action=chapters&examId=${encodeURIComponent(examId)}&subjectId=${encodeURIComponent(subjectId)}`,
+    `/api/pyq?action=chapters&examId=${encodeURIComponent(examId)}&subjectId=${encodeURIComponent(subjectId)}`,
   questions: (examId: string, subjectId: string, chapterId: string) =>
-    `/marks?action=questions&examId=${encodeURIComponent(examId)}&subjectId=${encodeURIComponent(subjectId)}&chapterId=${encodeURIComponent(chapterId)}`,
+    `/api/pyq?action=questions&examId=${encodeURIComponent(examId)}&subjectId=${encodeURIComponent(subjectId)}&chapterId=${encodeURIComponent(chapterId)}`,
 };
 
 type Step = 'category' | 'exam' | 'subject' | 'chapter' | 'questions';
@@ -31,6 +31,8 @@ interface QuestionItem {
   questionHtml: string;
   options: string[];
   answer?: string;
+  solutionHtml?: string;
+  pyqInfo?: string;
 }
 
 const CATEGORY_CONFIG: Array<{
@@ -56,10 +58,10 @@ const CATEGORY_CONFIG: Array<{
   },
   {
     key: 'shift',
-    title: 'JEE Advanced + Main (Shift Based) Chapter PYQs',
-    description: 'Shift-based chapter-wise questions combining both exams.',
+    title: 'Other Exam PYQs',
+    description: 'Practice with additional exams available in the GitHub PYQ library.',
     icon: ListChecks,
-    matches: (name) => name.includes('shift') || name.includes('chapter'),
+    matches: (name) => !name.includes('advanced') && !name.includes('main'),
   },
 ];
 
@@ -148,13 +150,15 @@ function normalizeQuestion(raw: any, index: number): QuestionItem {
     questionHtml,
     options: getOptions(raw),
     answer: coerceString(raw?.correctAnswer ?? raw?.answer ?? raw?.solution ?? ''),
+    solutionHtml: coerceString(raw?.solutionHtml ?? raw?.solution_html ?? ''),
+    pyqInfo: coerceString(raw?.pyqInfo ?? raw?.pyq_info ?? ''),
   };
 }
 
-async function fetchGetMarks(url: string) {
+async function fetchPyq(url: string) {
   const res = await fetch(url);
   if (!res.ok) {
-    throw new Error(`GetMarks request failed (${res.status})`);
+    throw new Error(`PYQ request failed (${res.status})`);
   }
   const contentType = res.headers.get('content-type') ?? '';
   if (contentType.includes('application/json')) {
@@ -163,7 +167,7 @@ async function fetchGetMarks(url: string) {
   const text = await res.text();
   const preview = text.trim().slice(0, 160);
   throw new Error(
-    `GetMarks returned non-JSON response. ${preview ? `Preview: ${preview}` : 'No response body.'}`
+    `PYQ returned non-JSON response. ${preview ? `Preview: ${preview}` : 'No response body.'}`
   );
 }
 
@@ -195,8 +199,8 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
       description: 'Distraction-free PYQ practice with consistent formatting.',
     },
     {
-      title: 'Neon-backed library',
-      description: 'Synced into Neon so your PYQs are always stored and ready to browse.',
+      title: 'GitHub-powered library',
+      description: 'Pulled from the open PYQ repository so new questions appear quickly.',
     },
   ];
 
@@ -223,7 +227,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchGetMarks(MARKS_API.exams);
+      const data = await fetchPyq(PYQ_API.exams);
       const list = extractArray(data, ['exams', 'data', 'items']);
       const normalized = list
         .map(normalizeItem)
@@ -246,7 +250,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchGetMarks(MARKS_API.subjects(exam.id));
+      const data = await fetchPyq(PYQ_API.subjects(exam.id));
       const list = extractArray(data, ['subjects', 'data', 'items']);
       const normalized = list
         .map(normalizeItem)
@@ -263,7 +267,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchGetMarks(MARKS_API.chapters(exam.id, subject.id));
+      const data = await fetchPyq(PYQ_API.chapters(exam.id, subject.id));
       const list = extractArray(data, ['chapters', 'data', 'items']);
       const normalized = list
         .map(normalizeChapter)
@@ -280,7 +284,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchGetMarks(MARKS_API.questions(exam.id, subject.id, chapter.id));
+      const data = await fetchPyq(PYQ_API.questions(exam.id, subject.id, chapter.id));
       const list = extractArray(data, ['questions', 'data', 'items']);
       const normalized = list.map((item, index) => normalizeQuestion(item, index));
       setQuestions(normalized);
@@ -365,7 +369,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
         </button>
         <div className="pyp-header-title">
           <h1>Past Year Questions</h1>
-          <span className="pyp-paper-count">Browse JEE PYQs stored in Neon by exam, subject, and chapter</span>
+          <span className="pyp-paper-count">Browse PYQs from the GitHub library by exam, subject, and chapter</span>
         </div>
       </div>
 
@@ -375,7 +379,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
           <h2>Find the exact questions you need in minutes.</h2>
           <p>
             Move from exam → subject → chapter to unlock precise question sets with clear labels,
-            instant filtering, and smoother navigation.
+            instant filtering, and smoother navigation pulled directly from GitHub.
           </p>
         </div>
         <div className="pyp-hero-cards">
@@ -526,6 +530,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                   <span className="pyp-question-num">Q{question.number}</span>
                   {question.subject && <span className="pyp-question-subject">{question.subject}</span>}
                   {question.type && <span className="pyp-question-type">{question.type}</span>}
+                  {question.pyqInfo && <span className="pyp-question-meta">{question.pyqInfo}</span>}
                 </div>
                 <div
                   className="pyp-question-html"
@@ -546,6 +551,15 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                 )}
                 {question.answer && (
                   <div className="pyp-question-answer">Answer: {question.answer}</div>
+                )}
+                {question.solutionHtml && (
+                  <div className="pyp-question-solution">
+                    <div className="pyp-question-solution-title">Solution</div>
+                    <div
+                      className="pyp-question-solution-body"
+                      dangerouslySetInnerHTML={{ __html: renderLatexInHtml(question.solutionHtml) }}
+                    />
+                  </div>
                 )}
               </div>
             ))
