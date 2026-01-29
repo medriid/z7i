@@ -15,6 +15,30 @@ export function renderLatexInHtml(html: string): string {
     }
   });
 
+  result = result.replace(/\\\[((?:[\s\S]*?))\\\]/g, (_, latex) => {
+    try {
+      return katex.renderToString(latex.trim(), {
+        displayMode: true,
+        throwOnError: false,
+        output: 'html'
+      });
+    } catch {
+      return `\\[${latex}\\]`;
+    }
+  });
+
+  result = result.replace(/\\\(([\s\S]*?)\\\)/g, (_, latex) => {
+    try {
+      return katex.renderToString(latex.trim(), {
+        displayMode: false,
+        throwOnError: false,
+        output: 'html'
+      });
+    } catch {
+      return `\\(${latex}\\)`;
+    }
+  });
+
   result = result.replace(/(?<!\$)\$(?!\$)((?:[^$\\]|\\.)+?)\$(?!\$)/g, (_, latex) => {
     try {
       return katex.renderToString(latex.trim(), {
