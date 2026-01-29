@@ -6,9 +6,7 @@ import {
   ClipboardCheck,
   GraduationCap,
   Layers,
-  ListChecks,
   Loader2,
-  PenSquare,
   Search,
 } from 'lucide-react';
 import { renderLatexInHtml } from './utils/latex';
@@ -24,8 +22,8 @@ const PYQ_API = {
   attempts: '/api/pyq?action=attempts',
 };
 
-type Step = 'category' | 'exam' | 'subject' | 'chapter' | 'questions';
-type CategoryKey = 'advanced' | 'mains' | 'shift';
+type Step = 'exam' | 'subject' | 'chapter' | 'questions';
+type EntryExamKey = 'advanced' | 'mains';
 
 interface BaseItem {
   id: string;
@@ -57,45 +55,29 @@ interface QuestionAttempt {
   createdAt?: string;
 }
 
-const CATEGORY_CONFIG: Array<{
-  key: CategoryKey;
+const ENTRY_EXAM_CONFIG: Array<{
+  key: EntryExamKey;
   title: string;
   description: string;
   icon: typeof BookOpen;
   matches: (name: string) => boolean;
 }> = [
   {
-    key: 'advanced',
-    title: 'JEE Advanced PYQs',
-    description: 'Past year questions from JEE Advanced papers.',
-    icon: BookOpen,
-    matches: (name) => name.includes('advanced'),
-  },
-  {
     key: 'mains',
-    title: 'JEE Main PYQs',
-    description: 'Past year questions from JEE Main papers.',
-    icon: Layers,
+    title: 'JEE Main',
+    description: 'Practice memory-based PYQs from JEE Main shifts.',
+    icon: ClipboardCheck,
     matches: (name) => name.includes('main'),
   },
   {
-    key: 'shift',
-    title: 'Other Exam PYQs',
-    description: 'Practice with additional exams available in the GitHub PYQ library.',
-    icon: ListChecks,
-    matches: (name) => !name.includes('advanced') && !name.includes('main'),
+    key: 'advanced',
+    title: 'JEE Advanced',
+    description: 'Solve tougher PYQs curated from JEE Advanced papers.',
+    icon: GraduationCap,
+    matches: (name) => name.includes('advanced'),
   },
 ];
 
-const EXAM_ICON_CONFIG: Array<{
-  matches: (name: string) => boolean;
-  icon: typeof BookOpen;
-}> = [
-  { matches: (name) => name.includes('advanced'), icon: GraduationCap },
-  { matches: (name) => name.includes('main'), icon: ClipboardCheck },
-  { matches: (name) => name.includes('neet'), icon: BookOpen },
-  { matches: (name) => name.includes('bitsat'), icon: PenSquare },
-];
 
 function extractArray(payload: unknown, keys: string[]): any[] {
   if (Array.isArray(payload)) return payload;
@@ -285,8 +267,7 @@ interface PastYearPapersProps {
 }
 
 export default function PastYearPapers({ onBack }: PastYearPapersProps) {
-  const [step, setStep] = useState<Step>('category');
-  const [category, setCategory] = useState<CategoryKey | null>(null);
+  const [step, setStep] = useState<Step>('exam');
   const [exams, setExams] = useState<BaseItem[]>([]);
   const [subjects, setSubjects] = useState<BaseItem[]>([]);
   const [chapters, setChapters] = useState<ChapterItem[]>([]);
@@ -303,13 +284,6 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
   const [questionTimes, setQuestionTimes] = useState<Record<string, number>>({});
   const [attemptsLoading, setAttemptsLoading] = useState(false);
-
-  const activeCategory = CATEGORY_CONFIG.find((item) => item.key === category) ?? null;
-
-  const filteredExams = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return exams.filter((exam) => exam.name.toLowerCase().includes(query));
-  }, [exams, search]);
 
   const filteredSubjects = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -331,7 +305,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     setAttemptsLoading(false);
   };
 
-  const loadExams = async (categoryKey: CategoryKey) => {
+  const loadExams = async () => {
     setLoading(true);
     setError(null);
     try {
@@ -344,9 +318,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
           ...item,
           name: item.name.trim(),
         }));
-      const matcher = CATEGORY_CONFIG.find((item) => item.key === categoryKey)?.matches ?? (() => true);
-      const filtered = normalized.filter((exam) => matcher(exam.name.toLowerCase()));
-      setExams(filtered);
+      setExams(normalized);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load exams');
     } finally {
@@ -434,20 +406,6 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     }
   };
 
-  const handleCategorySelect = async (key: CategoryKey) => {
-    setCategory(key);
-    setStep('exam');
-    resetSearch();
-    setSelectedExam(null);
-    setSelectedSubject(null);
-    setSelectedChapter(null);
-    setSubjects([]);
-    setChapters([]);
-    setQuestions([]);
-    resetPracticeState();
-    await loadExams(key);
-  };
-
   const handleExamSelect = async (exam: BaseItem) => {
     setSelectedExam(exam);
     setStep('subject');
@@ -515,11 +473,6 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     }
   };
 
-  const getExamIcon = (examName: string) => {
-    const normalized = examName.toLowerCase();
-    return EXAM_ICON_CONFIG.find((config) => config.matches(normalized))?.icon ?? null;
-  };
-
   const handleBack = () => {
     setError(null);
     if (step === 'questions') {
@@ -534,12 +487,12 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
       setStep('exam');
       return;
     }
-    if (step === 'exam') {
-      setStep('category');
-      return;
-    }
     if (onBack) onBack();
   };
+
+  useEffect(() => {
+    loadExams();
+  }, []);
 
   useEffect(() => {
     if (!activeQuestionId) return;
@@ -557,392 +510,459 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
   const activeQuestion =
     questions.find((question) => question.id === activeQuestionId) ?? questions[0] ?? null;
 
-  return (
-    <div className="pyp-page pyp-pyq">
-      <div className="pyp-header">
-        <button className="pyp-back-btn" onClick={handleBack}>
-          <ChevronLeft size={20} />
-        </button>
-        <div className="pyp-header-title">
-          <h1>Past Year Questions</h1>
-          <span className="pyp-paper-count">Browse PYQs from the GitHub library by exam, subject, and chapter</span>
+  const entryExamOptions = ENTRY_EXAM_CONFIG.map((item) => {
+    const exam = exams.find((candidate) => item.matches(candidate.name.toLowerCase())) ?? null;
+    return { ...item, exam };
+  });
+
+  const showSearch = step === 'subject' || step === 'chapter';
+
+  const summaryCounts = questions.reduce(
+    (acc, question) => {
+      const result = answerResults[question.id];
+      if (submittedAnswers[question.id] && result === true) acc.correct += 1;
+      else if (submittedAnswers[question.id] && result === false) acc.incorrect += 1;
+      else acc.unattempted += 1;
+      return acc;
+    },
+    { correct: 0, incorrect: 0, unattempted: 0 }
+  );
+
+  const renderQuestionPanel = () => {
+    if (questions.length === 0) {
+      return (
+        <div className="pyp-empty">
+          <p>No questions found.</p>
+          <p className="pyp-empty-hint">Try another chapter or refresh.</p>
         </div>
-      </div>
+      );
+    }
 
-      <div className="pyp-breadcrumbs">
-        <span className={step === 'category' ? 'active' : ''}>Category</span>
-        <span>›</span>
-        <span className={step === 'exam' ? 'active' : ''}>Exam</span>
-        <span>›</span>
-        <span className={step === 'subject' ? 'active' : ''}>Subject</span>
-        <span>›</span>
-        <span className={step === 'chapter' ? 'active' : ''}>Chapter</span>
-        <span>›</span>
-        <span className={step === 'questions' ? 'active' : ''}>Questions</span>
-      </div>
-
-      {step !== 'category' && (
-        <div className="pyp-selection-pill">
-          {activeCategory?.title && <span>{activeCategory.title}</span>}
-          {selectedExam && <span>• {selectedExam.name}</span>}
-          {selectedSubject && <span>• {selectedSubject.name}</span>}
-          {selectedChapter && <span>• {selectedChapter.name}</span>}
-        </div>
-      )}
-
-      {step === 'category' && (
-        <div className="pyp-category-grid">
-          {CATEGORY_CONFIG.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button key={item.key} className="pyp-category-card" onClick={() => handleCategorySelect(item.key)}>
-                <div className="pyp-category-icon">
-                  <Icon size={28} />
-                </div>
-                <div className="pyp-category-content">
-                  <h2>{item.title}</h2>
-                  <p>{item.description}</p>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {step !== 'category' && (
-        <div className="pyp-search-row">
-          <div className="pyp-search">
-            <Search size={16} />
-            <input
-              type="text"
-              placeholder={`Search ${step}...`}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
+    return (
+      <div className="exam-panel pyp-practice-shell">
+        <div className="exam-panel-topbar">
+          <button className="exam-back-btn" onClick={handleBack}>
+            <ChevronLeft size={20} />
+            <span>Back</span>
+          </button>
+          <div className="exam-title">
+            <h2>{selectedChapter?.name ?? 'Practice session'}</h2>
+            <span className="exam-subtitle">
+              {selectedExam?.name ?? 'JEE'} • {selectedSubject?.name ?? 'PYQ Practice'}
+            </span>
+          </div>
+          <div className="exam-summary">
+            <span className="summary-item correct">
+              <span>Correct</span>
+              {summaryCounts.correct}
+            </span>
+            <span className="summary-item incorrect">
+              <span>Incorrect</span>
+              {summaryCounts.incorrect}
+            </span>
+            <span className="summary-item skipped">
+              <span>Unattempted</span>
+              {summaryCounts.unattempted}
+            </span>
           </div>
         </div>
-      )}
-
-      {loading && (
-        <div className="pyp-loading">
-          <Loader2 className="spinning" size={32} />
-          <span>Loading...</span>
-        </div>
-      )}
-
-      {error && !loading && (
-        <div className="pyp-error">
-          <p>Unable to load data.</p>
-          <span>{error}</span>
-        </div>
-      )}
-
-      {!loading && !error && step === 'exam' && (
-        <div className="pyp-list-grid">
-          {filteredExams.length === 0 ? (
-            <div className="pyp-empty">
-              <p>No exams found.</p>
-              <p className="pyp-empty-hint">Try another category or refine your search.</p>
+        <div className="exam-panel-body">
+          <aside className="exam-nav-sidebar pyp-question-sidebar">
+            <div className="exam-nav-header">
+              <h3>Questions</h3>
+              <span className="pyp-question-count">{questions.length}</span>
             </div>
-          ) : (
-            filteredExams.map((exam) => (
-              <button
-                key={exam.id}
-                className="pyp-item-card pyp-exam-card"
-                onClick={() => handleExamSelect(exam)}
-              >
-                <span className={`pyp-item-icon ${getExamIcon(exam.name) ? '' : 'is-empty'}`}>
-                  {(() => {
-                    const Icon = getExamIcon(exam.name);
-                    return Icon ? <Icon size={22} /> : null;
-                  })()}
-                </span>
-                <div className="pyp-item-content">
-                  <h3>{exam.name}</h3>
-                  <span className="pyp-item-meta">Tap to view subjects</span>
-                </div>
-              </button>
-            ))
-          )}
-        </div>
-      )}
-
-      {!loading && !error && step === 'subject' && (
-        <div className="pyp-list-grid">
-          {filteredSubjects.length === 0 ? (
-            <div className="pyp-empty">
-              <p>No subjects found.</p>
-              <p className="pyp-empty-hint">Try another exam or refine your search.</p>
-            </div>
-          ) : (
-            filteredSubjects.map((subject) => (
-              <button key={subject.id} className="pyp-item-card" onClick={() => handleSubjectSelect(subject)}>
-                <h3>{subject.name}</h3>
-                <span className="pyp-item-meta">Tap to view chapters</span>
-              </button>
-            ))
-          )}
-        </div>
-      )}
-
-      {!loading && !error && step === 'chapter' && (
-        <div className="pyp-list-grid">
-          {filteredChapters.length === 0 ? (
-            <div className="pyp-empty">
-              <p>No chapters found.</p>
-              <p className="pyp-empty-hint">Try another subject or refine your search.</p>
-            </div>
-          ) : (
-            filteredChapters.map((chapter) => (
-              <button key={chapter.id} className="pyp-item-card" onClick={() => handleChapterSelect(chapter)}>
-                <h3>{chapter.name}</h3>
-                <span className="pyp-item-meta">
-                  {chapter.questionCount ? `${chapter.questionCount} questions` : 'Tap to view questions'}
-                </span>
-              </button>
-            ))
-          )}
-        </div>
-      )}
-
-      {!loading && !error && step === 'questions' && (
-        <div className="pyp-practice-panel">
-          <div className="pyp-practice-header">
-            <div>
-              <span className="pyp-practice-badge">Practice mode</span>
-              <h2>{selectedChapter?.name ?? 'Questions'}</h2>
-              <p>{questions.length} questions • Submit answers to see instant feedback</p>
-            </div>
-            <div className="pyp-practice-meta">
-              <span>
-                {activeQuestionIndex >= 0 ? activeQuestionIndex + 1 : 0}/{questions.length}
-              </span>
-              {attemptsLoading && <span className="pyp-practice-sync">Syncing attempts…</span>}
-            </div>
-          </div>
-          {questions.length === 0 ? (
-            <div className="pyp-empty">
-              <p>No questions found.</p>
-              <p className="pyp-empty-hint">Try another chapter or refresh.</p>
-            </div>
-          ) : (
-            <div className="pyp-practice-layout">
-              <aside className="pyp-question-list">
-                <div className="pyp-question-list-header">
-                  <span>Questions</span>
-                  <span className="pyp-question-list-count">{questions.length}</span>
-                </div>
-                <div className="pyp-question-list-items">
-                  {questions.map((question) => {
-                    const selectedIndex = selectedAnswers[question.id];
-                    const isSubmitted = submittedAnswers[question.id];
-                    const result = answerResults[question.id];
-                    const status =
-                      isSubmitted && result === true
-                        ? 'correct'
-                        : isSubmitted && result === false
-                          ? 'incorrect'
-                          : isSubmitted
-                            ? 'submitted'
-                            : selectedIndex !== null && selectedIndex !== undefined
-                              ? 'in-progress'
-                              : 'unattempted';
-                    return (
-                      <button
-                        key={question.id}
-                        className={[
-                          'pyp-question-list-item',
-                          status,
-                          question.id === activeQuestion?.id ? 'active' : '',
-                        ]
-                          .filter(Boolean)
-                          .join(' ')}
-                        onClick={() => setActiveQuestionId(question.id)}
-                        type="button"
-                      >
-                        <span className="pyp-question-list-num">Q{question.number}</span>
-                        <span className="pyp-question-list-status">{status.replace('-', ' ')}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </aside>
-              <section className="pyp-question-main">
-                {activeQuestion && (() => {
-                  const selectedIndex = selectedAnswers[activeQuestion.id];
-                  const isSubmitted = submittedAnswers[activeQuestion.id];
-                  const result = answerResults[activeQuestion.id];
-                  const correctIndexes = getCorrectOptionIndexes(activeQuestion.answer, activeQuestion.options.length);
-                  const hasCorrectAnswer = correctIndexes.length > 0;
-                  const correctAnswerLabel = formatCorrectAnswer(activeQuestion.answer, activeQuestion.options.length);
-                  const hasPrev = activeQuestionIndex > 0;
-                  const hasNext = activeQuestionIndex < questions.length - 1;
+            <div className="pyp-question-grid-wrap">
+              <div className="exam-nav-question-grid pyp-question-grid">
+                {questions.map((question) => {
+                  const isSubmitted = submittedAnswers[question.id];
+                  const result = answerResults[question.id];
+                  const status =
+                    isSubmitted && result === true
+                      ? 'correct'
+                      : isSubmitted && result === false
+                        ? 'incorrect'
+                        : 'unattempted';
                   return (
-                    <div className="pyp-question-card">
-                      <div className="pyp-question-header">
-                        <span className="pyp-question-num">Q{activeQuestion.number}</span>
-                        {activeQuestion.subject && <span className="pyp-question-subject">{activeQuestion.subject}</span>}
-                        {activeQuestion.type && <span className="pyp-question-type">{activeQuestion.type}</span>}
-                      </div>
-                      <div
-                        className="pyp-question-html invert-images"
-                        dangerouslySetInnerHTML={{ __html: renderLatexInHtml(activeQuestion.questionHtml) }}
-                      />
-                      {activeQuestion.options.length > 0 && (
-                        <div className="pyp-question-options">
-                          {activeQuestion.options.map((option, index) => (
-                            <button
-                              key={`${activeQuestion.id}-opt-${index}`}
-                              className={[
-                                'pyp-question-option',
-                                selectedIndex === index ? 'selected' : '',
-                                isSubmitted && correctIndexes.includes(index) ? 'correct' : '',
-                                isSubmitted && selectedIndex === index && !correctIndexes.includes(index)
-                                  ? 'incorrect'
-                                  : '',
-                              ]
-                                .filter(Boolean)
-                                .join(' ')}
-                              type="button"
-                              onClick={() => handleOptionSelect(activeQuestion.id, index)}
-                              disabled={isSubmitted}
-                            >
-                              <span className="pyp-option-label">{String.fromCharCode(65 + index)}</span>
-                              <span
-                                className="pyp-option-content invert-images"
-                                dangerouslySetInnerHTML={{ __html: renderLatexInHtml(option) }}
-                              />
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      <div className="pyp-question-actions">
+                    <button
+                      key={question.id}
+                      className={[
+                        'exam-nav-btn',
+                        status,
+                        question.id === activeQuestion?.id ? 'current' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                      onClick={() => setActiveQuestionId(question.id)}
+                      type="button"
+                    >
+                      {question.number}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="exam-nav-legend pyp-nav-legend">
+              <div className="legend-row">
+                <span className="legend-dot correct" />
+                Correct
+              </div>
+              <div className="legend-row">
+                <span className="legend-dot incorrect" />
+                Incorrect
+              </div>
+              <div className="legend-row">
+                <span className="legend-dot unattempted" />
+                Unattempted
+              </div>
+            </div>
+          </aside>
+          <section className="exam-main-content pyp-question-main">
+            {activeQuestion && (() => {
+              const selectedIndex = selectedAnswers[activeQuestion.id];
+              const isSubmitted = submittedAnswers[activeQuestion.id];
+              const result = answerResults[activeQuestion.id];
+              const correctIndexes = getCorrectOptionIndexes(activeQuestion.answer, activeQuestion.options.length);
+              const hasCorrectAnswer = correctIndexes.length > 0;
+              const correctAnswerLabel = formatCorrectAnswer(activeQuestion.answer, activeQuestion.options.length);
+              const hasPrev = activeQuestionIndex > 0;
+              const hasNext = activeQuestionIndex < questions.length - 1;
+              return (
+                <div className="pyp-question-card exam-question-card">
+                  <div className="pyp-question-header">
+                    <span className="pyp-question-num">Q{activeQuestion.number}</span>
+                    {activeQuestion.subject && <span className="pyp-question-subject">{activeQuestion.subject}</span>}
+                    {activeQuestion.type && <span className="pyp-question-type">{activeQuestion.type}</span>}
+                  </div>
+                  <div
+                    className="pyp-question-html invert-images"
+                    dangerouslySetInnerHTML={{ __html: renderLatexInHtml(activeQuestion.questionHtml) }}
+                  />
+                  {activeQuestion.options.length > 0 && (
+                    <div className="pyp-question-options">
+                      {activeQuestion.options.map((option, index) => (
                         <button
-                          className="pyp-submit-answer"
-                          type="button"
-                          onClick={() => handleSubmitAnswer(activeQuestion)}
-                          disabled={isSubmitted || selectedIndex === null || selectedIndex === undefined}
-                        >
-                          Submit answer
-                        </button>
-                        <div className="pyp-question-nav">
-                          <button
-                            className="pyp-nav-btn"
-                            type="button"
-                            onClick={() => setActiveQuestionId(questions[activeQuestionIndex - 1].id)}
-                            disabled={!hasPrev}
-                          >
-                            <ChevronLeft size={16} />
-                            Previous
-                          </button>
-                          <button
-                            className="pyp-nav-btn"
-                            type="button"
-                            onClick={() => setActiveQuestionId(questions[activeQuestionIndex + 1].id)}
-                            disabled={!hasNext}
-                          >
-                            Next
-                            <ChevronRight size={16} />
-                          </button>
-                        </div>
-                      </div>
-                      {isSubmitted && (
-                        <div
+                          key={`${activeQuestion.id}-opt-${index}`}
                           className={[
-                            'pyp-question-feedback',
-                            result === true ? 'correct' : '',
-                            result === false ? 'incorrect' : '',
-                            result === null ? 'neutral' : '',
+                            'pyp-question-option',
+                            selectedIndex === index ? 'selected' : '',
+                            isSubmitted && correctIndexes.includes(index) ? 'correct' : '',
+                            isSubmitted && selectedIndex === index && !correctIndexes.includes(index)
+                              ? 'incorrect'
+                              : '',
                           ]
                             .filter(Boolean)
                             .join(' ')}
+                          type="button"
+                          onClick={() => handleOptionSelect(activeQuestion.id, index)}
+                          disabled={isSubmitted}
                         >
-                          {result === true && 'Correct!'}
-                          {result === false && 'Incorrect.'}
-                          {result === null && 'Answer submitted.'}
-                          {hasCorrectAnswer && correctAnswerLabel && (
-                            <span>Correct answer: {correctAnswerLabel}</span>
-                          )}
-                        </div>
-                      )}
-                      {isSubmitted && activeQuestion.solutionHtml && (
-                        <div className="pyp-question-solution">
-                          <div className="pyp-question-solution-title">Solution</div>
-                          <div
-                            className="pyp-question-solution-body invert-images"
-                            dangerouslySetInnerHTML={{ __html: renderLatexInHtml(activeQuestion.solutionHtml) }}
+                          <span className="pyp-option-label">{String.fromCharCode(65 + index)}</span>
+                          <span
+                            className="pyp-option-content invert-images"
+                            dangerouslySetInnerHTML={{ __html: renderLatexInHtml(option) }}
                           />
-                        </div>
-                      )}
-                      {!activeQuestion.solutionHtml && isSubmitted && activeQuestion.answer && (
-                        <div className="pyp-question-answer">Answer: {activeQuestion.answer}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="pyp-question-actions">
+                    <button
+                      className="pyp-submit-answer"
+                      type="button"
+                      onClick={() => handleSubmitAnswer(activeQuestion)}
+                      disabled={isSubmitted || selectedIndex === null || selectedIndex === undefined}
+                    >
+                      Submit answer
+                    </button>
+                    <div className="pyp-question-nav">
+                      <button
+                        className="pyp-nav-btn"
+                        type="button"
+                        onClick={() => setActiveQuestionId(questions[activeQuestionIndex - 1].id)}
+                        disabled={!hasPrev}
+                      >
+                        <ChevronLeft size={16} />
+                        Previous
+                      </button>
+                      <button
+                        className="pyp-nav-btn"
+                        type="button"
+                        onClick={() => setActiveQuestionId(questions[activeQuestionIndex + 1].id)}
+                        disabled={!hasNext}
+                      >
+                        Next
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                  </div>
+                  {isSubmitted && (
+                    <div
+                      className={[
+                        'pyp-question-feedback',
+                        result === true ? 'correct' : '',
+                        result === false ? 'incorrect' : '',
+                        result === null ? 'neutral' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                    >
+                      {result === true && 'Correct!'}
+                      {result === false && 'Incorrect.'}
+                      {result === null && 'Answer submitted.'}
+                      {hasCorrectAnswer && correctAnswerLabel && (
+                        <span>Correct answer: {correctAnswerLabel}</span>
                       )}
                     </div>
-                  );
-                })()}
-              </section>
-              <aside className="pyp-question-meta-panel">
-                {activeQuestion && (() => {
-                  const meta = parsePyqInfo(activeQuestion.pyqInfo ?? '');
-                  const selectedIndex = selectedAnswers[activeQuestion.id];
-                  const isSubmitted = submittedAnswers[activeQuestion.id];
-                  const result = answerResults[activeQuestion.id];
-                  const correctAnswerLabel = formatCorrectAnswer(activeQuestion.answer, activeQuestion.options.length);
-                  const selectedLabel =
-                    selectedIndex !== null && selectedIndex !== undefined
-                      ? String.fromCharCode(65 + selectedIndex)
-                      : '—';
-                  const timeTaken = formatDuration(questionTimes[activeQuestion.id] ?? 0);
-                  return (
-                    <div className="pyp-meta-card">
-                      <h3>Question details</h3>
-                      <div className="pyp-meta-list">
-                        <div>
-                          <span>Year</span>
-                          <strong>{meta.year ?? '—'}</strong>
-                        </div>
-                        <div>
-                          <span>Date</span>
-                          <strong>{meta.date ?? '—'}</strong>
-                        </div>
-                        <div>
-                          <span>Shift</span>
-                          <strong>{meta.shift ?? '—'}</strong>
-                        </div>
-                        <div>
-                          <span>Your time</span>
-                          <strong>{timeTaken}</strong>
-                        </div>
-                        <div>
-                          <span>Avg time</span>
-                          <strong>—</strong>
-                        </div>
-                      </div>
-                      {activeQuestion.pyqInfo && (
-                        <div className="pyp-meta-info">
-                          <span>Paper</span>
-                          <p>{activeQuestion.pyqInfo}</p>
-                        </div>
-                      )}
-                      <div className="pyp-meta-analysis">
-                        <h4>Answer analysis</h4>
-                        {!isSubmitted && <p>Submit your answer to unlock analysis.</p>}
-                        {isSubmitted && (
-                          <div className="pyp-analysis-content">
-                            <span>{result === true ? 'Correct answer chosen.' : 'Answer needs review.'}</span>
-                            <span>Selected: {selectedLabel}</span>
-                            {correctAnswerLabel && <span>Correct: {correctAnswerLabel}</span>}
-                          </div>
-                        )}
-                      </div>
+                  )}
+                  {isSubmitted && activeQuestion.solutionHtml && (
+                    <div className="pyp-question-solution">
+                      <div className="pyp-question-solution-title">Solution</div>
+                      <div
+                        className="pyp-question-solution-body invert-images"
+                        dangerouslySetInnerHTML={{ __html: renderLatexInHtml(activeQuestion.solutionHtml) }}
+                      />
                     </div>
-                  );
-                })()}
-              </aside>
+                  )}
+                  {!activeQuestion.solutionHtml && isSubmitted && activeQuestion.answer && (
+                    <div className="pyp-question-answer">Answer: {activeQuestion.answer}</div>
+                  )}
+                </div>
+              );
+            })()}
+            <div className="exam-nav-footer pyp-question-footer">
+              <button
+                className="exam-nav-btn-large prev"
+                type="button"
+                onClick={() => setActiveQuestionId(questions[activeQuestionIndex - 1].id)}
+                disabled={activeQuestionIndex <= 0}
+              >
+                <ChevronLeft size={20} />
+                <span>Previous</span>
+              </button>
+              <div className="exam-nav-position">
+                <span className="current">{activeQuestionIndex >= 0 ? activeQuestionIndex + 1 : 0}</span>
+                <span className="separator">/</span>
+                <span className="total">{questions.length}</span>
+              </div>
+              <button
+                className="exam-nav-btn-large next"
+                type="button"
+                onClick={() => setActiveQuestionId(questions[activeQuestionIndex + 1].id)}
+                disabled={activeQuestionIndex >= questions.length - 1}
+              >
+                <span>Next</span>
+                <ChevronRight size={20} />
+              </button>
+            </div>
+          </section>
+          <aside className="exam-actions-sidebar pyp-question-meta-panel">
+            <div className="exam-actions-header">
+              <h3>Question info</h3>
+              {attemptsLoading && <span className="pyp-practice-sync">Syncing…</span>}
+            </div>
+            {activeQuestion && (() => {
+              const meta = parsePyqInfo(activeQuestion.pyqInfo ?? '');
+              const selectedIndex = selectedAnswers[activeQuestion.id];
+              const isSubmitted = submittedAnswers[activeQuestion.id];
+              const result = answerResults[activeQuestion.id];
+              const correctAnswerLabel = formatCorrectAnswer(activeQuestion.answer, activeQuestion.options.length);
+              const selectedLabel =
+                selectedIndex !== null && selectedIndex !== undefined
+                  ? String.fromCharCode(65 + selectedIndex)
+                  : '—';
+              const timeTaken = formatDuration(questionTimes[activeQuestion.id] ?? 0);
+              return (
+                <div className="pyp-meta-card">
+                  <h3>Question details</h3>
+                  <div className="pyp-meta-list">
+                    <div>
+                      <span>Year</span>
+                      <strong>{meta.year ?? '—'}</strong>
+                    </div>
+                    <div>
+                      <span>Date</span>
+                      <strong>{meta.date ?? '—'}</strong>
+                    </div>
+                    <div>
+                      <span>Shift</span>
+                      <strong>{meta.shift ?? '—'}</strong>
+                    </div>
+                    <div>
+                      <span>Your time</span>
+                      <strong>{timeTaken}</strong>
+                    </div>
+                    <div>
+                      <span>Avg time</span>
+                      <strong>—</strong>
+                    </div>
+                  </div>
+                  {activeQuestion.pyqInfo && (
+                    <div className="pyp-meta-info">
+                      <span>Paper</span>
+                      <p>{activeQuestion.pyqInfo}</p>
+                    </div>
+                  )}
+                  <div className="pyp-meta-analysis">
+                    <h4>Answer analysis</h4>
+                    {!isSubmitted && <p>Submit your answer to unlock analysis.</p>}
+                    {isSubmitted && (
+                      <div className="pyp-analysis-content">
+                        <span>{result === true ? 'Correct answer chosen.' : 'Answer needs review.'}</span>
+                        <span>Selected: {selectedLabel}</span>
+                        {correctAnswerLabel && <span>Correct: {correctAnswerLabel}</span>}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+          </aside>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className={`pyp-page pyp-pyq ${step === 'questions' ? 'pyp-practice-mode' : ''}`}>
+      {step !== 'questions' && (
+        <>
+          <div className="pyp-header">
+            <button className="pyp-back-btn" onClick={handleBack}>
+              <ChevronLeft size={20} />
+            </button>
+            <div className="pyp-header-title">
+              <h1>Past Year Questions</h1>
+              <span className="pyp-paper-count">Practice JEE Main & Advanced PYQs by subject and chapter.</span>
+            </div>
+          </div>
+
+          <div className="pyp-breadcrumbs">
+            <span className={step === 'exam' ? 'active' : ''}>Exam</span>
+            <span>›</span>
+            <span className={step === 'subject' ? 'active' : ''}>Subject</span>
+            <span>›</span>
+            <span className={step === 'chapter' ? 'active' : ''}>Chapter</span>
+            <span>›</span>
+            <span className={step === 'questions' ? 'active' : ''}>Questions</span>
+          </div>
+
+          {step !== 'exam' && (
+            <div className="pyp-selection-pill">
+              {selectedExam && <span>{selectedExam.name}</span>}
+              {selectedSubject && <span>• {selectedSubject.name}</span>}
+              {selectedChapter && <span>• {selectedChapter.name}</span>}
             </div>
           )}
-        </div>
+
+          {showSearch && (
+            <div className="pyp-search-row">
+              <div className="pyp-search">
+                <Search size={16} />
+                <input
+                  type="text"
+                  placeholder={`Search ${step}...`}
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </div>
+            </div>
+          )}
+
+          {loading && (
+            <div className="pyp-loading">
+              <Loader2 className="spinning" size={32} />
+              <span>Loading...</span>
+            </div>
+          )}
+
+          {error && !loading && (
+            <div className="pyp-error">
+              <p>Unable to load data.</p>
+              <span>{error}</span>
+            </div>
+          )}
+
+          {!loading && !error && step === 'exam' && (
+            <div className="pyp-exam-grid">
+              {entryExamOptions.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.key}
+                    className={`pyp-exam-select-card ${item.key}`}
+                    onClick={() => item.exam && handleExamSelect(item.exam)}
+                    type="button"
+                    disabled={!item.exam}
+                  >
+                    <div className="pyp-exam-select-top">
+                      <span className="pyp-exam-chip">{item.title}</span>
+                      <span className="pyp-exam-icon">
+                        <Icon size={24} />
+                      </span>
+                    </div>
+                    <h3>{item.title}</h3>
+                    <p>{item.description}</p>
+                    <span className="pyp-exam-meta">
+                      {item.exam ? 'Tap to view subjects' : 'Exam data unavailable'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {!loading && !error && step === 'subject' && (
+            <div className="pyp-list-grid pyp-topic-grid">
+              {filteredSubjects.length === 0 ? (
+                <div className="pyp-empty">
+                  <p>No subjects found.</p>
+                  <p className="pyp-empty-hint">Try another exam or refine your search.</p>
+                </div>
+              ) : (
+                filteredSubjects.map((subject) => (
+                  <button key={subject.id} className="pyp-item-card pyp-topic-card" onClick={() => handleSubjectSelect(subject)}>
+                    <div className="pyp-topic-icon">
+                      <BookOpen size={20} />
+                    </div>
+                    <div className="pyp-topic-content">
+                      <h3>{subject.name}</h3>
+                      <span className="pyp-item-meta">Tap to view chapters</span>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+
+          {!loading && !error && step === 'chapter' && (
+            <div className="pyp-list-grid pyp-topic-grid">
+              {filteredChapters.length === 0 ? (
+                <div className="pyp-empty">
+                  <p>No chapters found.</p>
+                  <p className="pyp-empty-hint">Try another subject or refine your search.</p>
+                </div>
+              ) : (
+                filteredChapters.map((chapter) => (
+                  <button key={chapter.id} className="pyp-item-card pyp-topic-card" onClick={() => handleChapterSelect(chapter)}>
+                    <div className="pyp-topic-icon">
+                      <Layers size={20} />
+                    </div>
+                    <div className="pyp-topic-content">
+                      <h3>{chapter.name}</h3>
+                      <span className="pyp-item-meta">
+                        {chapter.questionCount ? `${chapter.questionCount} questions` : 'Tap to view questions'}
+                      </span>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </>
       )}
+
+      {!loading && !error && step === 'questions' && renderQuestionPanel()}
     </div>
   );
 }
