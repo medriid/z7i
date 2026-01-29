@@ -11,8 +11,11 @@ import {
   Users,
   CheckCircle,
   XCircle,
+  Bookmark,
+  BookmarkCheck,
 } from 'lucide-react';
 import { renderLatexInHtml } from './utils/latex';
+import { ImageLightbox, useImageLightbox } from './components/ImageLightbox';
 
 const PYQ_API = {
   exams: '/api/pyq?action=exams',
@@ -65,6 +68,17 @@ interface QuestionAttempt {
   timeTaken?: number | null;
   createdAt?: string;
 }
+
+type ChapterProgress = {
+  correct: number;
+  incorrect: number;
+  unattempted: number;
+  total: number;
+};
+
+const PYQ_CHAPTER_PROGRESS_KEY = 'pyq-chapter-progress';
+const PYQ_NOTE_STORAGE_KEY = 'pyq-question-notes';
+const PYQ_BOOKMARK_STORAGE_KEY = 'pyq-question-bookmarks';
 
 const ENTRY_EXAM_CONFIG: Array<{
   key: EntryExamKey;
@@ -338,6 +352,60 @@ function parsePyqInfo(info: string) {
   };
 }
 
+function loadPyqBookmarks() {
+  const raw = localStorage.getItem(PYQ_BOOKMARK_STORAGE_KEY);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.reduce<Record<string, boolean>>((acc, id) => {
+        if (typeof id === 'string') acc[id] = true;
+        return acc;
+      }, {});
+    }
+    if (parsed && typeof parsed === 'object') return parsed as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+  return {};
+}
+
+function savePyqBookmarks(bookmarks: Record<string, boolean>) {
+  localStorage.setItem(PYQ_BOOKMARK_STORAGE_KEY, JSON.stringify(bookmarks));
+}
+
+function loadPyqNotes() {
+  const raw = localStorage.getItem(PYQ_NOTE_STORAGE_KEY);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed as Record<string, string>;
+  } catch {
+    return {};
+  }
+  return {};
+}
+
+function savePyqNotes(notes: Record<string, string>) {
+  localStorage.setItem(PYQ_NOTE_STORAGE_KEY, JSON.stringify(notes));
+}
+
+function loadPyqChapterProgress() {
+  const raw = localStorage.getItem(PYQ_CHAPTER_PROGRESS_KEY);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed as Record<string, ChapterProgress>;
+  } catch {
+    return {};
+  }
+  return {};
+}
+
+function savePyqChapterProgress(progress: Record<string, ChapterProgress>) {
+  localStorage.setItem(PYQ_CHAPTER_PROGRESS_KEY, JSON.stringify(progress));
+}
+
 interface PastYearPapersProps {
   onBack?: () => void;
 }
@@ -362,6 +430,14 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
   const [questionTimes, setQuestionTimes] = useState<Record<string, number>>({});
   const [attemptsLoading, setAttemptsLoading] = useState(false);
+  const [chapterProgress, setChapterProgress] = useState<Record<string, ChapterProgress>>(() =>
+    loadPyqChapterProgress()
+  );
+  const [questionNotes, setQuestionNotes] = useState<Record<string, string>>(() => loadPyqNotes());
+  const [noteStatus, setNoteStatus] = useState<Record<string, string>>({});
+  const [bookmarkedQuestions, setBookmarkedQuestions] = useState<Record<string, boolean>>(() =>
+    loadPyqBookmarks()
+  );
 
   const filteredSubjects = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -615,6 +691,34 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     }
   };
 
+  const handleToggleBookmark = (questionId: string) => {
+    setBookmarkedQuestions((prev) => {
+      const next = { ...prev };
+      if (next[questionId]) {
+        delete next[questionId];
+      } else {
+        next[questionId] = true;
+      }
+      savePyqBookmarks(next);
+      return next;
+    });
+  };
+
+  const handleSaveNote = (questionId: string) => {
+    const note = questionNotes[questionId]?.trim() ?? '';
+    setNoteStatus((prev) => ({ ...prev, [questionId]: note ? 'Note saved.' : 'Note cleared.' }));
+    setQuestionNotes((prev) => {
+      const next = { ...prev };
+      if (note) {
+        next[questionId] = note;
+      } else {
+        delete next[questionId];
+      }
+      savePyqNotes(next);
+      return next;
+    });
+  };
+
   const handleBack = () => {
     setError(null);
     if (step === 'questions') {
@@ -669,6 +773,47 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     },
     { correct: 0, incorrect: 0, unattempted: 0 }
   );
+
+  const lightboxContext = useMemo(
+    () => ({
+      questionId: activeQuestion?.id,
+      label: activeQuestion ? `PYQ Q${activeQuestion.number}` : undefined,
+      subject: activeQuestion?.subject,
+      testName: selectedChapter?.name ?? 'PYQ',
+    }),
+    [activeQuestion?.id, activeQuestion?.number, activeQuestion?.subject, selectedChapter?.name]
+  );
+
+  const { lightboxState, handleImageClick, closeLightbox } = useImageLightbox(lightboxContext);
+
+  useEffect(() => {
+    if (!selectedChapter || step !== 'questions' || questions.length === 0) return;
+    const progress = questions.reduce<ChapterProgress>(
+      (acc, question) => {
+        const result = answerResults[question.id];
+        if (submittedAnswers[question.id] && result === true) acc.correct += 1;
+        else if (submittedAnswers[question.id] && result === false) acc.incorrect += 1;
+        else acc.unattempted += 1;
+        return acc;
+      },
+      { correct: 0, incorrect: 0, unattempted: 0, total: questions.length }
+    );
+    setChapterProgress((prev) => {
+      const existing = prev[selectedChapter.id];
+      if (
+        existing &&
+        existing.correct === progress.correct &&
+        existing.incorrect === progress.incorrect &&
+        existing.unattempted === progress.unattempted &&
+        existing.total === progress.total
+      ) {
+        return prev;
+      }
+      const next = { ...prev, [selectedChapter.id]: progress };
+      savePyqChapterProgress(next);
+      return next;
+    });
+  }, [answerResults, questions, selectedChapter, step, submittedAnswers]);
 
   const renderQuestionPanel = () => {
     if (questions.length === 0) {
@@ -786,10 +931,20 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                     <span className="pyp-question-num">Q{activeQuestion.number}</span>
                     {activeQuestion.subject && <span className="pyp-question-subject">{activeQuestion.subject}</span>}
                     {activeQuestion.type && <span className="pyp-question-type">{activeQuestion.type}</span>}
+                    <button
+                      className={`pyp-bookmark-btn ${bookmarkedQuestions[activeQuestion.id] ? 'active' : ''}`}
+                      type="button"
+                      onClick={() => handleToggleBookmark(activeQuestion.id)}
+                      title={bookmarkedQuestions[activeQuestion.id] ? 'Remove bookmark' : 'Bookmark question'}
+                    >
+                      {bookmarkedQuestions[activeQuestion.id] ? <BookmarkCheck size={16} /> : <Bookmark size={16} />}
+                      <span>{bookmarkedQuestions[activeQuestion.id] ? 'Bookmarked' : 'Bookmark'}</span>
+                    </button>
                   </div>
                   <div
-                    className="pyp-question-html invert-images"
+                    className="pyp-question-html invert-images clickable-images"
                     dangerouslySetInnerHTML={{ __html: renderLatexInHtml(activeQuestion.questionHtml) }}
+                    onClick={handleImageClick}
                   />
                   {isNumerical && (
                     <div className="pyp-question-numerical">
@@ -831,13 +986,20 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                               .filter(Boolean)
                               .join(' ')}
                             type="button"
-                            onClick={() => handleOptionSelect(activeQuestion, index)}
+                            onClick={(event) => {
+                              if ((event.target as HTMLElement).tagName === 'IMG') {
+                                handleImageClick(event);
+                                return;
+                              }
+                              handleOptionSelect(activeQuestion, index);
+                            }}
                             disabled={isSubmitted}
                           >
                             <span className="pyp-option-label">{String.fromCharCode(65 + index)}</span>
                             <span
-                              className="pyp-option-content invert-images"
+                              className="pyp-option-content invert-images clickable-images"
                               dangerouslySetInnerHTML={{ __html: renderLatexInHtml(option) }}
+                              onClick={handleImageClick}
                             />
                           </button>
                         );
@@ -900,14 +1062,44 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                     <div className="pyp-question-solution">
                       <div className="pyp-question-solution-title">Solution</div>
                       <div
-                        className="pyp-question-solution-body invert-images"
+                        className="pyp-question-solution-body invert-images clickable-images"
                         dangerouslySetInnerHTML={{ __html: renderLatexInHtml(activeQuestion.solutionHtml) }}
+                        onClick={handleImageClick}
                       />
                     </div>
                   )}
                   {!activeQuestion.solutionHtml && isSubmitted && activeQuestion.answer && (
                     <div className="pyp-question-answer">Answer: {activeQuestion.answer}</div>
                   )}
+                  <div className="pyp-question-notes">
+                    <div className="pyp-question-notes-header">
+                      <span>Notes</span>
+                      {noteStatus[activeQuestion.id] && (
+                        <span className="pyp-question-notes-status">{noteStatus[activeQuestion.id]}</span>
+                      )}
+                    </div>
+                    <textarea
+                      className="pyp-question-notes-input"
+                      rows={3}
+                      placeholder="Type your note for this question..."
+                      value={questionNotes[activeQuestion.id] ?? ''}
+                      onChange={(event) =>
+                        setQuestionNotes((prev) => ({
+                          ...prev,
+                          [activeQuestion.id]: event.target.value,
+                        }))
+                      }
+                    />
+                    <div className="pyp-question-notes-actions">
+                      <button
+                        type="button"
+                        className="pyp-notes-save"
+                        onClick={() => handleSaveNote(activeQuestion.id)}
+                      >
+                        Save note
+                      </button>
+                    </div>
+                  </div>
                 </div>
               );
             })()}
@@ -1179,6 +1371,37 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                       <span className="pyp-item-meta">
                         {chapter.questionCount ? `${chapter.questionCount} questions` : 'Tap to view questions'}
                       </span>
+                      {(() => {
+                        const progress = chapterProgress[chapter.id];
+                        const total = progress?.total ?? chapter.questionCount ?? 0;
+                        const correct = progress?.correct ?? 0;
+                        const incorrect = progress?.incorrect ?? 0;
+                        const unattempted = progress?.unattempted ?? Math.max(total - correct - incorrect, 0);
+                        const safeTotal = total > 0 ? total : 1;
+                        return (
+                          <div className="pyp-chapter-progress">
+                            <div className="pyp-chapter-bars">
+                              <span
+                                className="pyp-chapter-bar correct"
+                                style={{ width: `${(correct / safeTotal) * 100}%` }}
+                              />
+                              <span
+                                className="pyp-chapter-bar incorrect"
+                                style={{ width: `${(incorrect / safeTotal) * 100}%` }}
+                              />
+                              <span
+                                className="pyp-chapter-bar unattempted"
+                                style={{ width: `${(unattempted / safeTotal) * 100}%` }}
+                              />
+                            </div>
+                            <div className="pyp-chapter-progress-meta">
+                              <span className="correct">{correct}</span>
+                              <span className="incorrect">{incorrect}</span>
+                              <span className="unattempted">{unattempted}</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </button>
                 ))
@@ -1189,6 +1412,13 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
       )}
 
       {!loading && !error && step === 'questions' && renderQuestionPanel()}
+      {lightboxState && (
+        <ImageLightbox
+          src={lightboxState.src}
+          context={lightboxState.context}
+          onClose={closeLightbox}
+        />
+      )}
     </div>
   );
 }
