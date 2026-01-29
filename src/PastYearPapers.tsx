@@ -268,6 +268,7 @@ interface PastYearPapersProps {
 
 export default function PastYearPapers({ onBack }: PastYearPapersProps) {
   const [step, setStep] = useState<Step>('exam');
+  const isQuestionsStep = step === 'questions';
   const [exams, setExams] = useState<BaseItem[]>([]);
   const [subjects, setSubjects] = useState<BaseItem[]>([]);
   const [chapters, setChapters] = useState<ChapterItem[]>([]);
@@ -824,8 +825,8 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
   };
 
   return (
-    <div className={`pyp-page pyp-pyq ${step === 'questions' ? 'pyp-practice-mode' : ''}`}>
-      {step !== 'questions' && (
+    <div className={`pyp-page pyp-pyq ${isQuestionsStep ? 'pyp-practice-mode' : ''}`}>
+      {!isQuestionsStep && (
         <>
           <div className="pyp-header">
             <button className="pyp-back-btn" onClick={handleBack}>
@@ -844,7 +845,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
             <span>›</span>
             <span className={step === 'chapter' ? 'active' : ''}>Chapter</span>
             <span>›</span>
-            <span className={step === 'questions' ? 'active' : ''}>Questions</span>
+            <span className={isQuestionsStep ? 'active' : ''}>Questions</span>
           </div>
 
           {step !== 'exam' && (
