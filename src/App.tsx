@@ -8293,7 +8293,7 @@ function Dashboard({ user, onUserUpdate }: { user: UserType; onUserUpdate: (user
               </button>
               <button className="btn btn-secondary" onClick={openPYP}>
                 <Trophy size={16} />
-                PYP
+                PYQ
               </button>
               {user.z7iLinked && (
                 <>

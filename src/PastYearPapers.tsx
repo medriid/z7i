@@ -208,6 +208,99 @@ function isMultiAnswerType(type: string | undefined) {
   return MULTI_ANSWER_TYPES.some((entry) => normalized.includes(entry));
 }
 
+const CHAPTER_CATEGORY_CONFIG: Record<
+  'physics' | 'chemistry' | 'math',
+  Array<{ label: string; keywords: string[] }>
+> = {
+  physics: [
+    {
+      label: 'Mechanics',
+      keywords: ['mechanics', 'kinematics', 'laws of motion', 'work', 'energy', 'power', 'rotation', 'gravitation', 'fluid', 'center of mass'],
+    },
+    {
+      label: 'Electrodynamics',
+      keywords: ['electrostatics', 'current', 'electric', 'capacitor', 'magnet', 'emi', 'induction', 'ac'],
+    },
+    {
+      label: 'Optics',
+      keywords: ['optics', 'reflection', 'refraction', 'lens', 'mirror', 'optical'],
+    },
+    {
+      label: 'Thermodynamics & KTG',
+      keywords: ['thermodynamics', 'thermal', 'heat', 'kinetic theory'],
+    },
+    {
+      label: 'Waves & Oscillations',
+      keywords: ['wave', 'oscillation', 'shm', 'sound'],
+    },
+    {
+      label: 'Modern Physics',
+      keywords: ['modern', 'photoelectric', 'nuclear', 'atom', 'semiconductor', 'dual nature'],
+    },
+  ],
+  chemistry: [
+    {
+      label: 'Physical Chemistry',
+      keywords: ['mole', 'stoichiometry', 'atomic', 'thermodynamics', 'equilibrium', 'electrochem', 'chemical kinetics', 'states of matter', 'solution', 'solid state', 'surface', 'redox'],
+    },
+    {
+      label: 'Organic Chemistry',
+      keywords: ['hydrocarbon', 'organic', 'goc', 'isomer', 'stereo', 'alkyl', 'halo', 'alcohol', 'phenol', 'ether', 'aldehyde', 'ketone', 'carboxylic', 'amine', 'biomolecule', 'polymer'],
+    },
+    {
+      label: 'Inorganic Chemistry',
+      keywords: ['periodic', 'chemical bonding', 'coordination', 's block', 'p block', 'd block', 'f block', 'metallurgy', 'hydrogen'],
+    },
+  ],
+  math: [
+    {
+      label: 'Calculus',
+      keywords: ['limit', 'continuity', 'differentiation', 'integration', 'differential equation', 'area under'],
+    },
+    {
+      label: 'Algebra',
+      keywords: ['quadratic', 'complex', 'sequence', 'series', 'permutation', 'combination', 'binomial', 'matrix', 'determinant', 'probability', 'set', 'relation', 'function'],
+    },
+    {
+      label: 'Coordinate Geometry',
+      keywords: ['coordinate', 'straight line', 'circle', 'parabola', 'ellipse', 'hyperbola', 'conic'],
+    },
+    {
+      label: 'Vectors & 3D',
+      keywords: ['vector', '3d', 'three dimensional', 'direction cosines', 'direction ratios'],
+    },
+    {
+      label: 'Trigonometry',
+      keywords: ['trigonometry', 'trigonometric'],
+    },
+    {
+      label: 'Probability & Statistics',
+      keywords: ['probability', 'statistics'],
+    },
+  ],
+};
+
+function getSubjectCategoryKey(subjectName: string | undefined) {
+  const normalized = subjectName?.toLowerCase() ?? '';
+  if (normalized.includes('phys')) return 'physics';
+  if (normalized.includes('chem')) return 'chemistry';
+  if (normalized.includes('math')) return 'math';
+  return null;
+}
+
+function getChapterCategory(subjectName: string | undefined, chapterName: string) {
+  const subjectKey = getSubjectCategoryKey(subjectName);
+  if (!subjectKey) return 'Chapters';
+  const normalized = chapterName.toLowerCase();
+  const configs = CHAPTER_CATEGORY_CONFIG[subjectKey];
+  for (const config of configs) {
+    if (config.keywords.some((keyword) => normalized.includes(keyword))) {
+      return config.label;
+    }
+  }
+  return 'Other topics';
+}
+
 function parseNumericRanges(answer: string | undefined) {
   if (!answer) return [];
   return answer
@@ -448,6 +541,35 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     const query = search.trim().toLowerCase();
     return chapters.filter((chapter) => chapter.name.toLowerCase().includes(query));
   }, [chapters, search]);
+
+  const chapterSections = useMemo(() => {
+    if (filteredChapters.length === 0) return [];
+    const subjectKey = getSubjectCategoryKey(selectedSubject?.name);
+    const categoryOrder = subjectKey ? CHAPTER_CATEGORY_CONFIG[subjectKey].map((config) => config.label) : [];
+    const grouped = new Map<string, ChapterItem[]>();
+    filteredChapters.forEach((chapter) => {
+      const category = getChapterCategory(selectedSubject?.name, chapter.name);
+      const existing = grouped.get(category);
+      if (existing) {
+        existing.push(chapter);
+      } else {
+        grouped.set(category, [chapter]);
+      }
+    });
+    const sections = categoryOrder
+      .map((label) => ({ label, chapters: grouped.get(label) ?? [] }))
+      .filter((section) => section.chapters.length > 0);
+    const fallbackLabel = subjectKey ? 'Other topics' : 'Chapters';
+    const remaining = grouped.get(fallbackLabel);
+    if (remaining && remaining.length > 0) {
+      sections.push({ label: fallbackLabel, chapters: remaining });
+    }
+    grouped.forEach((chaptersList, label) => {
+      if (categoryOrder.includes(label) || label === fallbackLabel) return;
+      if (chaptersList.length > 0) sections.push({ label, chapters: chaptersList });
+    });
+    return sections;
+  }, [filteredChapters, selectedSubject?.name]);
 
   const resetSearch = () => setSearch('');
   const resetPracticeState = () => {
@@ -864,12 +986,23 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                 {questions.map((question) => {
                   const isSubmitted = submittedAnswers[question.id];
                   const result = answerResults[question.id];
+                  const isNumerical = isNumericalType(question.type);
+                  const numericValue = numericAnswers[question.id] ?? '';
+                  const selectedValue = selectedAnswers[question.id];
+                  const selectedIndexes = Array.isArray(selectedValue)
+                    ? selectedValue
+                    : selectedValue === null || selectedValue === undefined
+                      ? []
+                      : [selectedValue];
+                  const hasSelection = isNumerical ? Boolean(numericValue.trim()) : selectedIndexes.length > 0;
                   const status =
                     isSubmitted && result === true
                       ? 'correct'
                       : isSubmitted && result === false
                         ? 'incorrect'
-                        : 'unattempted';
+                        : hasSelection
+                          ? 'in-progress'
+                          : 'unattempted';
                   return (
                     <button
                       key={question.id}
@@ -897,6 +1030,10 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
               <div className="legend-row">
                 <span className="legend-dot incorrect" />
                 Incorrect
+              </div>
+              <div className="legend-row">
+                <span className="legend-dot in-progress" />
+                In progress
               </div>
               <div className="legend-row">
                 <span className="legend-dot unattempted" />
@@ -1161,42 +1298,44 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                   ? formatDuration(attemptStats.averageTime)
                   : '—';
               return (
-                <div className="pyp-meta-card">
-                  <h3>Question details</h3>
-                  <div className="pyp-meta-list">
-                    <div>
-                      <span>Year</span>
-                      <strong>{meta.year ?? '—'}</strong>
+                <>
+                  <div className="pyp-meta-card">
+                    <h3>Question details</h3>
+                    <div className="pyp-meta-list">
+                      <div>
+                        <span>Year</span>
+                        <strong>{meta.year ?? '—'}</strong>
+                      </div>
+                      <div>
+                        <span>Shift</span>
+                        <strong>{meta.shift ?? '—'}</strong>
+                      </div>
+                      <div>
+                        <span>Your time</span>
+                        <strong>{timeTaken}</strong>
+                      </div>
+                      <div>
+                        <span>Avg time</span>
+                        <strong>{averageTime}</strong>
+                      </div>
                     </div>
-                    <div>
-                      <span>Shift</span>
-                      <strong>{meta.shift ?? '—'}</strong>
-                    </div>
-                    <div>
-                      <span>Your time</span>
-                      <strong>{timeTaken}</strong>
-                    </div>
-                    <div>
-                      <span>Avg time</span>
-                      <strong>{averageTime}</strong>
-                    </div>
-                  </div>
-                  {activeQuestion.pyqInfo && (
-                    <div className="pyp-meta-info">
-                      <span>Paper</span>
-                      <p>{activeQuestion.pyqInfo}</p>
-                    </div>
-                  )}
-                  <div className="pyp-meta-analysis">
-                    <h4>Answer analysis</h4>
-                    {!isSubmitted && <p>Submit your answer to unlock analysis.</p>}
-                    {isSubmitted && (
-                      <div className="pyp-analysis-content">
-                        <span>{result === true ? 'Correct answer chosen.' : 'Answer needs review.'}</span>
-                        <span>Selected: {selectedLabel}</span>
-                        {correctAnswerLabel && <span>Correct: {correctAnswerLabel}</span>}
+                    {activeQuestion.pyqInfo && (
+                      <div className="pyp-meta-info">
+                        <span>Paper</span>
+                        <p>{activeQuestion.pyqInfo}</p>
                       </div>
                     )}
+                    <div className="pyp-meta-analysis">
+                      <h4>Answer analysis</h4>
+                      {!isSubmitted && <p>Submit your answer to unlock analysis.</p>}
+                      {isSubmitted && (
+                        <div className="pyp-analysis-content">
+                          <span>{result === true ? 'Correct answer chosen.' : 'Answer needs review.'}</span>
+                          <span>Selected: {selectedLabel}</span>
+                          {correctAnswerLabel && <span>Correct: {correctAnswerLabel}</span>}
+                        </div>
+                      )}
+                    </div>
                   </div>
                   {attemptStats && attemptStats.totalAttempts > 0 && (
                     <div className="exam-action-section answer-analysis-section">
@@ -1232,7 +1371,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                       </div>
                     </div>
                   )}
-                </div>
+                </>
               );
             })()}
           </aside>
@@ -1354,56 +1493,70 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
           )}
 
           {!loading && !error && step === 'chapter' && (
-            <div className="pyp-list-grid pyp-topic-grid">
+            <div className="pyp-chapter-sections">
               {filteredChapters.length === 0 ? (
                 <div className="pyp-empty">
                   <p>No chapters found.</p>
                   <p className="pyp-empty-hint">Try another subject or refine your search.</p>
                 </div>
               ) : (
-                filteredChapters.map((chapter) => (
-                  <button key={chapter.id} className="pyp-item-card pyp-topic-card" onClick={() => handleChapterSelect(chapter)}>
-                    <div className="pyp-topic-icon">
-                      <Layers size={20} />
+                chapterSections.map((section) => (
+                  <div key={section.label} className="pyp-chapter-section">
+                    <div className="pyp-chapter-section-header">
+                      <h3>{section.label}</h3>
+                      <span>{section.chapters.length} chapters</span>
                     </div>
-                    <div className="pyp-topic-content">
-                      <h3>{chapter.name}</h3>
-                      <span className="pyp-item-meta">
-                        {chapter.questionCount ? `${chapter.questionCount} questions` : 'Tap to view questions'}
-                      </span>
-                      {(() => {
-                        const progress = chapterProgress[chapter.id];
-                        const total = progress?.total ?? chapter.questionCount ?? 0;
-                        const correct = progress?.correct ?? 0;
-                        const incorrect = progress?.incorrect ?? 0;
-                        const unattempted = progress?.unattempted ?? Math.max(total - correct - incorrect, 0);
-                        const safeTotal = total > 0 ? total : 1;
-                        return (
-                          <div className="pyp-chapter-progress">
-                            <div className="pyp-chapter-bars">
-                              <span
-                                className="pyp-chapter-bar correct"
-                                style={{ width: `${(correct / safeTotal) * 100}%` }}
-                              />
-                              <span
-                                className="pyp-chapter-bar incorrect"
-                                style={{ width: `${(incorrect / safeTotal) * 100}%` }}
-                              />
-                              <span
-                                className="pyp-chapter-bar unattempted"
-                                style={{ width: `${(unattempted / safeTotal) * 100}%` }}
-                              />
-                            </div>
-                            <div className="pyp-chapter-progress-meta">
-                              <span className="correct">{correct}</span>
-                              <span className="incorrect">{incorrect}</span>
-                              <span className="unattempted">{unattempted}</span>
-                            </div>
+                    <div className="pyp-list-grid pyp-topic-grid pyp-chapter-grid">
+                      {section.chapters.map((chapter) => (
+                        <button
+                          key={chapter.id}
+                          className="pyp-item-card pyp-topic-card pyp-chapter-card"
+                          onClick={() => handleChapterSelect(chapter)}
+                        >
+                          <div className="pyp-topic-icon">
+                            <Layers size={20} />
                           </div>
-                        );
-                      })()}
+                          <div className="pyp-topic-content">
+                            <h3>{chapter.name}</h3>
+                            <span className="pyp-item-meta">
+                              {chapter.questionCount ? `${chapter.questionCount} questions` : 'Tap to view questions'}
+                            </span>
+                            {(() => {
+                              const progress = chapterProgress[chapter.id];
+                              const total = progress?.total ?? chapter.questionCount ?? 0;
+                              const correct = progress?.correct ?? 0;
+                              const incorrect = progress?.incorrect ?? 0;
+                              const unattempted = progress?.unattempted ?? Math.max(total - correct - incorrect, 0);
+                              const safeTotal = total > 0 ? total : 1;
+                              return (
+                                <div className="pyp-chapter-progress">
+                                  <div className="pyp-chapter-bars">
+                                    <span
+                                      className="pyp-chapter-bar correct"
+                                      style={{ width: `${(correct / safeTotal) * 100}%` }}
+                                    />
+                                    <span
+                                      className="pyp-chapter-bar incorrect"
+                                      style={{ width: `${(incorrect / safeTotal) * 100}%` }}
+                                    />
+                                    <span
+                                      className="pyp-chapter-bar unattempted"
+                                      style={{ width: `${(unattempted / safeTotal) * 100}%` }}
+                                    />
+                                  </div>
+                                  <div className="pyp-chapter-progress-meta">
+                                    <span className="correct">{correct}</span>
+                                    <span className="incorrect">{incorrect}</span>
+                                    <span className="unattempted">{unattempted}</span>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        </button>
+                      ))}
                     </div>
-                  </button>
+                  </div>
                 ))
               )}
             </div>
