@@ -215,38 +215,82 @@ async function handleQuestions(req: VercelRequest, res: VercelResponse) {
 
   const cacheKey = `${examId}:${subjectId}:${chapterId}`;
   const cached = chapterQuestionsCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return res.status(200).json({ success: true, data: { items: cached.value } });
+  let baseQuestions = cached?.value;
+  if (!baseQuestions || cached.expiresAt <= Date.now()) {
+    const index = await getChapterIndex(catalog, chapter);
+    const basePath = `${RAW_BASE}${catalog.root}/${chapter.path}/`;
+    const questionPayloads = await Promise.all(
+      index.question_paths.map(async (questionPath) => {
+        const payloadUrl = `${basePath}${questionPath}/payload.json`;
+        const payload = await fetchJson<any>(payloadUrl);
+        const assetBase = `${basePath}${questionPath}/`;
+        return {
+          id: payload?.id ?? `${chapterId}-${payload?.index ?? questionPath}`,
+          questionNumber: typeof payload?.index === 'number' ? payload.index + 1 : 0,
+          subject: payload?.tags?.subject_name ?? payload?.subject ?? displayName(subject.name, subject.display),
+          type: payload?.type ?? payload?.question_type ?? '',
+          questionHtml: buildQuestionHtml(payload?.question?.text, payload?.question?.image, assetBase),
+          options: Array.isArray(payload?.options)
+            ? payload.options.map((opt: any) => buildOptionHtml(opt?.text, opt?.image, assetBase))
+            : [],
+          answer: Array.isArray(payload?.correct_answer)
+            ? payload.correct_answer.join(', ')
+            : payload?.correct_answer ?? '',
+          solutionHtml: buildQuestionHtml(payload?.solution?.text, payload?.solution?.image, assetBase),
+          pyqInfo: payload?.pyq_info ?? '',
+        };
+      })
+    );
+    baseQuestions = questionPayloads.sort((a, b) => (a.questionNumber ?? 0) - (b.questionNumber ?? 0));
+    chapterQuestionsCache.set(cacheKey, { value: baseQuestions, expiresAt: Date.now() + CACHE_TTL_MS });
   }
 
-  const index = await getChapterIndex(catalog, chapter);
-  const basePath = `${RAW_BASE}${catalog.root}/${chapter.path}/`;
-  const questionPayloads = await Promise.all(
-    index.question_paths.map(async (questionPath) => {
-      const payloadUrl = `${basePath}${questionPath}/payload.json`;
-      const payload = await fetchJson<any>(payloadUrl);
-      const assetBase = `${basePath}${questionPath}/`;
-      return {
-        id: payload?.id ?? `${chapterId}-${payload?.index ?? questionPath}`,
-        questionNumber: typeof payload?.index === 'number' ? payload.index + 1 : 0,
-        subject: payload?.tags?.subject_name ?? payload?.subject ?? displayName(subject.name, subject.display),
-        type: payload?.type ?? payload?.question_type ?? '',
-        questionHtml: buildQuestionHtml(payload?.question?.text, payload?.question?.image, assetBase),
-        options: Array.isArray(payload?.options)
-          ? payload.options.map((opt: any) => buildOptionHtml(opt?.text, opt?.image, assetBase))
-          : [],
-        answer: Array.isArray(payload?.correct_answer)
-          ? payload.correct_answer.join(', ')
-          : payload?.correct_answer ?? '',
-        solutionHtml: buildQuestionHtml(payload?.solution?.text, payload?.solution?.image, assetBase),
-        pyqInfo: payload?.pyq_info ?? '',
-      };
-    })
-  );
+  const questionIds = baseQuestions.map((item) => item.id);
+  const attempts = await prisma.pyqQuestionAttempt.findMany({
+    where: { questionId: { in: questionIds } },
+    select: { questionId: true, isCorrect: true, timeTaken: true },
+  });
 
-  const sorted = questionPayloads.sort((a, b) => (a.questionNumber ?? 0) - (b.questionNumber ?? 0));
-  chapterQuestionsCache.set(cacheKey, { value: sorted, expiresAt: Date.now() + CACHE_TTL_MS });
-  return res.status(200).json({ success: true, data: { items: sorted } });
+  const statsMap = new Map<
+    string,
+    { totalAttempts: number; correct: number; incorrect: number; timeSum: number; timeCount: number }
+  >();
+
+  attempts.forEach((attempt) => {
+    const existing = statsMap.get(attempt.questionId) ?? {
+      totalAttempts: 0,
+      correct: 0,
+      incorrect: 0,
+      timeSum: 0,
+      timeCount: 0,
+    };
+    existing.totalAttempts += 1;
+    if (attempt.isCorrect === true) existing.correct += 1;
+    if (attempt.isCorrect === false) existing.incorrect += 1;
+    if (typeof attempt.timeTaken === 'number' && attempt.timeTaken > 0) {
+      existing.timeSum += attempt.timeTaken;
+      existing.timeCount += 1;
+    }
+    statsMap.set(attempt.questionId, existing);
+  });
+
+  const withStats = baseQuestions.map((question) => {
+    const stats = statsMap.get(question.id);
+    return {
+      ...question,
+      attemptStats: stats
+        ? {
+            totalAttempts: stats.totalAttempts,
+            correct: stats.correct,
+            incorrect: stats.incorrect,
+            averageTime: stats.timeCount > 0 ? Math.round(stats.timeSum / stats.timeCount) : null,
+            timeCount: stats.timeCount,
+          }
+        : null,
+    };
+  });
+
+  return res.status(200).json({ success: true, data: { items: withStats } });
 }
 
 async function handleSaveAttempt(req: VercelRequest, res: VercelResponse) {
@@ -266,6 +310,7 @@ async function handleSaveAttempt(req: VercelRequest, res: VercelResponse) {
     answerLabel,
     correctAnswer,
     isCorrect,
+    timeTaken,
   } = req.body as {
     questionId?: string;
     examId?: string;
@@ -276,6 +321,7 @@ async function handleSaveAttempt(req: VercelRequest, res: VercelResponse) {
     answerLabel?: string;
     correctAnswer?: string;
     isCorrect?: boolean | null;
+    timeTaken?: number;
   };
 
   if (!questionId) {
@@ -294,6 +340,7 @@ async function handleSaveAttempt(req: VercelRequest, res: VercelResponse) {
       answerLabel: answerLabel || null,
       correctAnswer: correctAnswer || null,
       isCorrect: typeof isCorrect === 'boolean' ? isCorrect : null,
+      timeTaken: typeof timeTaken === 'number' ? timeTaken : null,
     },
   });
 
@@ -333,6 +380,7 @@ async function handleAttempts(req: VercelRequest, res: VercelResponse) {
     answerLabel: attempt.answerLabel,
     correctAnswer: attempt.correctAnswer,
     isCorrect: attempt.isCorrect,
+    timeTaken: attempt.timeTaken,
     createdAt: attempt.createdAt,
   }));
 

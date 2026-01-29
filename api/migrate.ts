@@ -545,9 +545,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         "answerLabel" TEXT,
         "correctAnswer" TEXT,
         "isCorrect" BOOLEAN,
+        "timeTaken" INTEGER,
         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `;
+
+    await sql`ALTER TABLE "PyqQuestionAttempt" ADD COLUMN IF NOT EXISTS "timeTaken" INTEGER`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS "CustomTest" (

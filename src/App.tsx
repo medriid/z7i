@@ -436,6 +436,12 @@ const formatAnswerDisplay = (answer: string, questionType?: string | null) => {
   return answer.toUpperCase();
 };
 
+const formatTimeWithDecimal = (value?: number | null) => {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '-';
+  if (value >= 60) return `${(value / 60).toFixed(1)}m`;
+  return `${value.toFixed(1)}s`;
+};
+
 const normalizeAnswerKey = (answer: string, questionType?: string | null) => {
   if (isMcqType(questionType)) {
     return formatMcqAnswers(parseMcqAnswers(answer));
@@ -6306,15 +6312,13 @@ function ExamQuestionView({ question, displayNumber }: { question: Question; dis
         <div className="stat-item">
           <Timer size={12} />
           <span className="stat-label">You</span>
-          <span className="stat-value">{question.timeTaken ? (question.timeTaken >= 60 ? `${(question.timeTaken / 60).toFixed(1)}m` : `${question.timeTaken}s`) : '-'}</span>
+          <span className="stat-value">{formatTimeWithDecimal(question.timeTaken)}</span>
         </div>
         <div className="stat-item">
           <Clock size={12} />
           <span className="stat-label">Avg</span>
           <span className="stat-value">
-            {question.userStats?.avgTime 
-              ? (question.userStats.avgTime >= 60 ? `${(question.userStats.avgTime / 60).toFixed(1)}m` : `${question.userStats.avgTime}s`)
-              : '-'}
+            {formatTimeWithDecimal(question.userStats?.avgTime ?? null)}
           </span>
         </div>
       </div>
