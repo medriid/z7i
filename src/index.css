@@ -12934,14 +12934,14 @@ body {
 }
 
 .pyp-question-option.correct {
-  border-color: var(--text-primary);
-  background: rgba(148, 163, 184, 0.18);
+  border-color: var(--success);
+  background: var(--success-bg);
 }
 
 .pyp-question-option.incorrect {
-  border-color: var(--text-muted);
+  border-color: var(--error);
   border-style: dashed;
-  background: rgba(148, 163, 184, 0.12);
+  background: var(--error-bg);
 }
 
 .pyp-question-option img {
@@ -12956,6 +12956,42 @@ body {
   margin-top: 1rem;
   justify-content: space-between;
   align-items: center;
+}
+
+.pyp-question-numerical {
+  margin-top: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.pyp-numerical-input {
+  padding: 0.6rem 0.8rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  background: var(--bg-elevated);
+  color: inherit;
+  font: inherit;
+}
+
+.pyp-numerical-input:focus {
+  outline: none;
+  border-color: var(--text-primary);
+}
+
+.pyp-numerical-input.correct {
+  border-color: var(--success);
+  background: var(--success-bg);
+}
+
+.pyp-numerical-input.incorrect {
+  border-color: var(--error);
+  background: var(--error-bg);
+}
+
+.pyp-multi-hint {
+  font-size: 0.85rem;
+  color: var(--text-muted);
 }
 
 .pyp-submit-answer {

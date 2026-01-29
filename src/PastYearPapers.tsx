@@ -8,6 +8,9 @@ import {
   Layers,
   Loader2,
   Search,
+  Users,
+  CheckCircle,
+  XCircle,
 } from 'lucide-react';
 import { renderLatexInHtml } from './utils/latex';
 
@@ -44,6 +47,13 @@ interface QuestionItem {
   answer?: string;
   solutionHtml?: string;
   pyqInfo?: string;
+  attemptStats?: {
+    totalAttempts: number;
+    correct: number;
+    incorrect: number;
+    averageTime: number | null;
+    timeCount: number;
+  } | null;
 }
 
 interface QuestionAttempt {
@@ -52,6 +62,7 @@ interface QuestionAttempt {
   isCorrect: boolean | null;
   answerLabel?: string | null;
   correctAnswer?: string | null;
+  timeTaken?: number | null;
   createdAt?: string;
 }
 
@@ -170,6 +181,55 @@ function getCorrectOptionIndexes(answer: string | undefined, optionCount: number
   return Array.from(indexes);
 }
 
+const NUMERICAL_TYPES = ['NAT', 'NUMERICAL', 'INTEGER'];
+const MULTI_ANSWER_TYPES = ['MSQ', 'MULTIPLE', 'MULTI', 'MAQ'];
+
+function isNumericalType(type: string | undefined) {
+  const normalized = type?.toUpperCase() ?? '';
+  return NUMERICAL_TYPES.some((entry) => normalized.includes(entry));
+}
+
+function isMultiAnswerType(type: string | undefined) {
+  const normalized = type?.toUpperCase() ?? '';
+  return MULTI_ANSWER_TYPES.some((entry) => normalized.includes(entry));
+}
+
+function parseNumericRanges(answer: string | undefined) {
+  if (!answer) return [];
+  return answer
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .flatMap((part) => {
+      const rangeMatch = part.match(/^([+-]?\d*\.?\d+)\s*(?:-|–|—|\.\.)\s*([+-]?\d*\.?\d+)$/);
+      if (rangeMatch) {
+        const min = Number(rangeMatch[1]);
+        const max = Number(rangeMatch[2]);
+        if (!Number.isNaN(min) && !Number.isNaN(max)) {
+          return [{ min: Math.min(min, max), max: Math.max(min, max) }];
+        }
+      }
+      const numericValue = Number(part);
+      if (!Number.isNaN(numericValue)) {
+        return [{ min: numericValue, max: numericValue }];
+      }
+      return [];
+    });
+}
+
+function matchesNumericAnswer(studentAnswer: string, correctAnswer: string | undefined) {
+  if (!correctAnswer) return null;
+  const trimmed = studentAnswer.trim();
+  if (!trimmed) return null;
+  const studentValue = Number(trimmed);
+  if (Number.isNaN(studentValue)) return false;
+  const ranges = parseNumericRanges(correctAnswer);
+  if (ranges.length === 0) {
+    return trimmed === correctAnswer.trim();
+  }
+  return ranges.some((range) => studentValue >= range.min && studentValue <= range.max);
+}
+
 function formatCorrectAnswer(answer: string | undefined, optionCount: number): string {
   const indexes = getCorrectOptionIndexes(answer, optionCount);
   if (indexes.length === 0) return answer ?? '';
@@ -192,6 +252,7 @@ function normalizeQuestion(raw: any, index: number): QuestionItem {
     answer: coerceString(raw?.correctAnswer ?? raw?.answer ?? raw?.solution ?? ''),
     solutionHtml: coerceString(raw?.solutionHtml ?? raw?.solution_html ?? ''),
     pyqInfo: coerceString(raw?.pyqInfo ?? raw?.pyq_info ?? ''),
+    attemptStats: raw?.attemptStats ?? null,
   };
 }
 
@@ -247,6 +308,21 @@ function formatDuration(totalSeconds: number) {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
+function updateAttemptStats(
+  existing: QuestionItem['attemptStats'],
+  payload: { isCorrect: boolean | null; timeTaken: number }
+) {
+  const base = existing ?? { totalAttempts: 0, correct: 0, incorrect: 0, averageTime: null, timeCount: 0 };
+  const totalAttempts = base.totalAttempts + 1;
+  const correct = base.correct + (payload.isCorrect === true ? 1 : 0);
+  const incorrect = base.incorrect + (payload.isCorrect === false ? 1 : 0);
+  const hasTime = payload.timeTaken > 0;
+  const timeCount = base.timeCount + (hasTime ? 1 : 0);
+  const timeSum = (base.averageTime ?? 0) * base.timeCount + (hasTime ? payload.timeTaken : 0);
+  const averageTime = timeCount > 0 ? Math.round(timeSum / timeCount) : null;
+  return { totalAttempts, correct, incorrect, averageTime, timeCount };
+}
+
 function parsePyqInfo(info: string) {
   if (!info) return { year: undefined, date: undefined, shift: undefined };
   const yearMatch = info.match(/20\d{2}/);
@@ -279,7 +355,8 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number | null>>({});
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number | number[] | null>>({});
+  const [numericAnswers, setNumericAnswers] = useState<Record<string, string>>({});
   const [submittedAnswers, setSubmittedAnswers] = useState<Record<string, boolean>>({});
   const [answerResults, setAnswerResults] = useState<Record<string, boolean | null>>({});
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
@@ -299,6 +376,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
   const resetSearch = () => setSearch('');
   const resetPracticeState = () => {
     setSelectedAnswers({});
+    setNumericAnswers({});
     setSubmittedAnswers({});
     setAnswerResults({});
     setActiveQuestionId(null);
@@ -442,32 +520,95 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
     await loadQuestions(selectedExam, selectedSubject, chapter);
   };
 
-  const handleOptionSelect = (questionId: string, index: number) => {
-    if (submittedAnswers[questionId]) return;
-    setSelectedAnswers((prev) => ({ ...prev, [questionId]: index }));
+  const handleOptionSelect = (question: QuestionItem, index: number) => {
+    if (submittedAnswers[question.id]) return;
+    if (isMultiAnswerType(question.type)) {
+      setSelectedAnswers((prev) => {
+        const existing = prev[question.id];
+        const selected = Array.isArray(existing) ? existing : existing === null || existing === undefined ? [] : [existing];
+        if (selected.includes(index)) {
+          return { ...prev, [question.id]: selected.filter((value) => value !== index) };
+        }
+        return { ...prev, [question.id]: [...selected, index].sort((a, b) => a - b) };
+      });
+      return;
+    }
+    setSelectedAnswers((prev) => ({ ...prev, [question.id]: index }));
   };
 
   const handleSubmitAnswer = (question: QuestionItem) => {
-    const selectedIndex = selectedAnswers[question.id];
-    if (selectedIndex === null || selectedIndex === undefined) return;
+    const selectedValue = selectedAnswers[question.id];
+    const isNumerical = isNumericalType(question.type);
+    const isMulti = isMultiAnswerType(question.type);
+    const timeTaken = questionTimes[question.id] ?? 0;
+    if (isNumerical) {
+      const numericValue = numericAnswers[question.id] ?? '';
+      if (!numericValue.trim()) return;
+      const isCorrect = matchesNumericAnswer(numericValue, question.answer);
+      setSubmittedAnswers((prev) => ({ ...prev, [question.id]: true }));
+      setAnswerResults((prev) => ({ ...prev, [question.id]: isCorrect }));
+      setQuestions((prev) =>
+        prev.map((item) =>
+          item.id === question.id
+            ? { ...item, attemptStats: updateAttemptStats(item.attemptStats, { isCorrect, timeTaken }) }
+            : item
+        )
+      );
+      const token = localStorage.getItem('token');
+      if (token) {
+        savePyqAttempt(token, {
+          questionId: question.id,
+          examId: selectedExam?.id ?? null,
+          subjectId: selectedSubject?.id ?? null,
+          chapterId: selectedChapter?.id ?? null,
+          questionNumber: question.number,
+          selectedOptionIndex: null,
+          answerLabel: numericValue.trim(),
+          correctAnswer: question.answer ?? null,
+          isCorrect,
+          timeTaken,
+        }).catch((error) => {
+          console.error('Failed to save PYQ attempt:', error);
+        });
+      }
+      return;
+    }
+    const selectedIndexes = Array.isArray(selectedValue)
+      ? selectedValue
+      : selectedValue === null || selectedValue === undefined
+        ? []
+        : [selectedValue];
+    if (selectedIndexes.length === 0) return;
     const correctIndexes = getCorrectOptionIndexes(question.answer, question.options.length);
+    const selectedSet = new Set(selectedIndexes);
     const isCorrect =
-      correctIndexes.length > 0 ? correctIndexes.includes(selectedIndex) : null;
+      correctIndexes.length > 0
+        ? correctIndexes.every((index) => selectedSet.has(index)) && selectedSet.size === correctIndexes.length
+        : null;
     setSubmittedAnswers((prev) => ({ ...prev, [question.id]: true }));
     setAnswerResults((prev) => ({ ...prev, [question.id]: isCorrect }));
+    setQuestions((prev) =>
+      prev.map((item) =>
+        item.id === question.id
+          ? { ...item, attemptStats: updateAttemptStats(item.attemptStats, { isCorrect, timeTaken }) }
+          : item
+      )
+    );
     const token = localStorage.getItem('token');
     if (token) {
-      const answerLabel = String.fromCharCode(65 + selectedIndex);
+      const answerLabel = selectedIndexes.map((index) => String.fromCharCode(65 + index)).join(', ');
       savePyqAttempt(token, {
         questionId: question.id,
         examId: selectedExam?.id ?? null,
         subjectId: selectedSubject?.id ?? null,
         chapterId: selectedChapter?.id ?? null,
         questionNumber: question.number,
-        selectedOptionIndex: selectedIndex,
+        selectedOptionIndex: isMulti ? null : selectedIndexes[0],
+        selectedOptionIndexes: isMulti ? selectedIndexes : undefined,
         answerLabel,
         correctAnswer: question.answer ?? null,
         isCorrect,
+        timeTaken,
       }).catch((error) => {
         console.error('Failed to save PYQ attempt:', error);
       });
@@ -620,14 +761,25 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
           </aside>
           <section className="exam-main-content pyp-question-main">
             {activeQuestion && (() => {
-              const selectedIndex = selectedAnswers[activeQuestion.id];
+              const selectedValue = selectedAnswers[activeQuestion.id];
+              const selectedIndexes = Array.isArray(selectedValue)
+                ? selectedValue
+                : selectedValue === null || selectedValue === undefined
+                  ? []
+                  : [selectedValue];
+              const numericValue = numericAnswers[activeQuestion.id] ?? '';
               const isSubmitted = submittedAnswers[activeQuestion.id];
               const result = answerResults[activeQuestion.id];
+              const isNumerical = isNumericalType(activeQuestion.type);
+              const isMulti = isMultiAnswerType(activeQuestion.type);
               const correctIndexes = getCorrectOptionIndexes(activeQuestion.answer, activeQuestion.options.length);
               const hasCorrectAnswer = correctIndexes.length > 0;
-              const correctAnswerLabel = formatCorrectAnswer(activeQuestion.answer, activeQuestion.options.length);
+              const correctAnswerLabel = isNumerical
+                ? activeQuestion.answer ?? ''
+                : formatCorrectAnswer(activeQuestion.answer, activeQuestion.options.length);
               const hasPrev = activeQuestionIndex > 0;
               const hasNext = activeQuestionIndex < questions.length - 1;
+              const hasSelection = isNumerical ? Boolean(numericValue.trim()) : selectedIndexes.length > 0;
               return (
                 <div className="pyp-question-card exam-question-card">
                   <div className="pyp-question-header">
@@ -639,32 +791,57 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                     className="pyp-question-html invert-images"
                     dangerouslySetInnerHTML={{ __html: renderLatexInHtml(activeQuestion.questionHtml) }}
                   />
+                  {isNumerical && (
+                    <div className="pyp-question-numerical">
+                      <label htmlFor={`pyp-numerical-${activeQuestion.id}`}>Your answer</label>
+                      <input
+                        id={`pyp-numerical-${activeQuestion.id}`}
+                        className={[
+                          'pyp-numerical-input',
+                          isSubmitted && result === true ? 'correct' : '',
+                          isSubmitted && result === false ? 'incorrect' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                        type="text"
+                        inputMode="decimal"
+                        value={numericValue}
+                        onChange={(event) =>
+                          setNumericAnswers((prev) => ({ ...prev, [activeQuestion.id]: event.target.value }))
+                        }
+                        placeholder="Enter numeric value"
+                        disabled={isSubmitted}
+                      />
+                    </div>
+                  )}
                   {activeQuestion.options.length > 0 && (
                     <div className="pyp-question-options">
-                      {activeQuestion.options.map((option, index) => (
-                        <button
-                          key={`${activeQuestion.id}-opt-${index}`}
-                          className={[
-                            'pyp-question-option',
-                            selectedIndex === index ? 'selected' : '',
-                            isSubmitted && correctIndexes.includes(index) ? 'correct' : '',
-                            isSubmitted && selectedIndex === index && !correctIndexes.includes(index)
-                              ? 'incorrect'
-                              : '',
-                          ]
-                            .filter(Boolean)
-                            .join(' ')}
-                          type="button"
-                          onClick={() => handleOptionSelect(activeQuestion.id, index)}
-                          disabled={isSubmitted}
-                        >
-                          <span className="pyp-option-label">{String.fromCharCode(65 + index)}</span>
-                          <span
-                            className="pyp-option-content invert-images"
-                            dangerouslySetInnerHTML={{ __html: renderLatexInHtml(option) }}
-                          />
-                        </button>
-                      ))}
+                      {activeQuestion.options.map((option, index) => {
+                        const isSelected = selectedIndexes.includes(index);
+                        const isCorrect = correctIndexes.includes(index);
+                        return (
+                          <button
+                            key={`${activeQuestion.id}-opt-${index}`}
+                            className={[
+                              'pyp-question-option',
+                              isSelected ? 'selected' : '',
+                              isSubmitted && isCorrect ? 'correct' : '',
+                              isSubmitted && isSelected && !isCorrect ? 'incorrect' : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' ')}
+                            type="button"
+                            onClick={() => handleOptionSelect(activeQuestion, index)}
+                            disabled={isSubmitted}
+                          >
+                            <span className="pyp-option-label">{String.fromCharCode(65 + index)}</span>
+                            <span
+                              className="pyp-option-content invert-images"
+                              dangerouslySetInnerHTML={{ __html: renderLatexInHtml(option) }}
+                            />
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                   <div className="pyp-question-actions">
@@ -672,10 +849,13 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                       className="pyp-submit-answer"
                       type="button"
                       onClick={() => handleSubmitAnswer(activeQuestion)}
-                      disabled={isSubmitted || selectedIndex === null || selectedIndex === undefined}
+                      disabled={isSubmitted || !hasSelection}
                     >
                       Submit answer
                     </button>
+                    {isMulti && !isSubmitted && (
+                      <span className="pyp-multi-hint">Select all that apply.</span>
+                    )}
                     <div className="pyp-question-nav">
                       <button
                         className="pyp-nav-btn"
@@ -764,15 +944,30 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
             </div>
             {activeQuestion && (() => {
               const meta = parsePyqInfo(activeQuestion.pyqInfo ?? '');
-              const selectedIndex = selectedAnswers[activeQuestion.id];
+              const selectedValue = selectedAnswers[activeQuestion.id];
+              const selectedIndexes = Array.isArray(selectedValue)
+                ? selectedValue
+                : selectedValue === null || selectedValue === undefined
+                  ? []
+                  : [selectedValue];
+              const isNumerical = isNumericalType(activeQuestion.type);
+              const numericValue = numericAnswers[activeQuestion.id] ?? '';
               const isSubmitted = submittedAnswers[activeQuestion.id];
               const result = answerResults[activeQuestion.id];
-              const correctAnswerLabel = formatCorrectAnswer(activeQuestion.answer, activeQuestion.options.length);
-              const selectedLabel =
-                selectedIndex !== null && selectedIndex !== undefined
-                  ? String.fromCharCode(65 + selectedIndex)
+              const attemptStats = activeQuestion.attemptStats ?? null;
+              const correctAnswerLabel = isNumerical
+                ? activeQuestion.answer ?? ''
+                : formatCorrectAnswer(activeQuestion.answer, activeQuestion.options.length);
+              const selectedLabel = isNumerical
+                ? numericValue.trim() || '—'
+                : selectedIndexes.length > 0
+                  ? selectedIndexes.map((index) => String.fromCharCode(65 + index)).join(', ')
                   : '—';
               const timeTaken = formatDuration(questionTimes[activeQuestion.id] ?? 0);
+              const averageTime =
+                attemptStats && typeof attemptStats.averageTime === 'number'
+                  ? formatDuration(attemptStats.averageTime)
+                  : '—';
               return (
                 <div className="pyp-meta-card">
                   <h3>Question details</h3>
@@ -780,10 +975,6 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                     <div>
                       <span>Year</span>
                       <strong>{meta.year ?? '—'}</strong>
-                    </div>
-                    <div>
-                      <span>Date</span>
-                      <strong>{meta.date ?? '—'}</strong>
                     </div>
                     <div>
                       <span>Shift</span>
@@ -795,7 +986,7 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                     </div>
                     <div>
                       <span>Avg time</span>
-                      <strong>—</strong>
+                      <strong>{averageTime}</strong>
                     </div>
                   </div>
                   {activeQuestion.pyqInfo && (
@@ -815,6 +1006,40 @@ export default function PastYearPapers({ onBack }: PastYearPapersProps) {
                       </div>
                     )}
                   </div>
+                  {attemptStats && attemptStats.totalAttempts > 0 && (
+                    <div className="exam-action-section answer-analysis-section">
+                      <div className="exam-comments-header">
+                        <Users size={14} />
+                        <span>Answer Analysis ({attemptStats.totalAttempts} attempts)</span>
+                      </div>
+                      <div className="analysis-bars compact">
+                        <div className="analysis-row">
+                          <span className="analysis-label correct">
+                            <CheckCircle size={10} /> Correct
+                          </span>
+                          <div className="analysis-bar-container">
+                            <div
+                              className="analysis-bar correct"
+                              style={{ width: `${(attemptStats.correct / attemptStats.totalAttempts) * 100}%` }}
+                            />
+                          </div>
+                          <span className="analysis-count">{attemptStats.correct}</span>
+                        </div>
+                        <div className="analysis-row">
+                          <span className="analysis-label incorrect">
+                            <XCircle size={10} /> Wrong
+                          </span>
+                          <div className="analysis-bar-container">
+                            <div
+                              className="analysis-bar incorrect"
+                              style={{ width: `${(attemptStats.incorrect / attemptStats.totalAttempts) * 100}%` }}
+                            />
+                          </div>
+                          <span className="analysis-count">{attemptStats.incorrect}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })()}

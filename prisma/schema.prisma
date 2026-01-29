@@ -640,6 +640,7 @@ model PyqQuestionAttempt {
   answerLabel         String?
   correctAnswer       String?
   isCorrect           Boolean?
+  timeTaken           Int?
   createdAt           DateTime @default(now())
 
   @@index([userId, questionId])
