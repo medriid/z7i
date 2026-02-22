@@ -1,0 +1,959 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id                       String   @id @default(cuid())
+  email                    String   @unique
+  password                 String // bcrypt hashed
+  name                     String?
+  profileImageUrl          String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  themeMode                String   @default("dark")
+  themeCustomEnabled       Boolean  @default(false)
+  themeAccent              String?
+  themeAccentSecondary     String?
+  themeSuccess             String?
+  themeError               String?
+  themeWarning             String?
+  themeUnattempted         String?
+  themeNavBgColor          String?
+  themeNavGifUrl           String?
+  themeHomeBgGifUrl        String?
+  themeHomeBgPositionX     Int?
+  themeHomeBgPositionY     Int?
+  themeAiChatsBgGifUrl     String?
+  themeAiChatsBgPositionX  Int?
+  themeAiChatsBgPositionY  Int?
+  themePyqBgGifUrl         String?
+  themePyqBgPositionX      Int?
+  themePyqBgPositionY      Int?
+  themeForumBgGifUrl       String?
+  themeForumBgPositionX    Int?
+  themeForumBgPositionY    Int?
+  themeTestCardBgGifUrl    String?
+  themeTestCardBgPositionX Int?
+  themeTestCardBgPositionY Int?
+  twoFactorEnabled         Boolean  @default(false)
+  twoFactorCodeHash        String?
+  twoFactorCodeExpiresAt   DateTime?
+  twoFactorCodeRequestedAt DateTime?
+  passwordResetCodeHash        String?
+  passwordResetCodeExpiresAt   DateTime?
+  passwordResetCodeRequestedAt DateTime?
+
+  lastIpAddress       String? // Last known IP address
+  canUseAiSolutions   Boolean @default(false) // Permission to use AI solutions
+  canAccessAiChatRoom Boolean @default(false) // Permission to access AI chatroom
+  canUseGuestSync     Boolean @default(false) // Permission to use guest sync
+  isOwner             Boolean @default(false)
+  zoneWorkspace       Json?
+
+  dashboardBrandName      String?
+  dashboardBrandColor     String?
+  chatFavoriteGifs        Json?
+  leagueUnranked          Boolean  @default(false)
+  leagueUnrankedUpdatedAt DateTime?
+
+  z7iAccount Z7iAccount?
+
+  sessions Session[]
+
+  aiChatSessions AiChatSession[]
+  aiChatConfigs  AiChatPersonalityConfig[]
+
+  customTestsCreated  CustomTest[]         @relation("CustomTestsCreated")
+  customTestAttempts  CustomTestAttempt[]
+  pyqQuestionAttempts PyqQuestionAttempt[]
+  pyqQuestionStates   PyqQuestionState[]
+
+  leagueProfile UserLeagueProfile?
+  expEvents     UserExpEvent[]
+  ipLogs        UserIpLog[]
+  forumMentions ForumMention[]   @relation("MentionedUser")
+  actionHistory UserActionHistory[]
+
+  chatMessages      ChatMessage[]
+  directMessagesReceived ChatMessage[] @relation("DirectMessageRecipient")
+  createdChatGroups ChatGroup[] @relation("ChatGroupCreator")
+  chatGroupMemberships ChatGroupMember[]
+  chatReactions     ChatReaction[]
+  chatMessageReads  ChatMessageRead[]
+  chatMentions      ChatMention[]
+  announcements     Announcement[]      @relation("AnnouncementCreator")
+  announcementReads AnnouncementRead[]
+
+  // Friends & blocking
+  friendRequestsSent     FriendRequest[]  @relation("FriendRequestSender")
+  friendRequestsReceived FriendRequest[]  @relation("FriendRequestReceiver")
+  blockedUsers           UserBlock[]      @relation("Blocker")
+  blockedByUsers         UserBlock[]      @relation("Blocked")
+  chatPrivacy            String           @default("everyone") // "everyone" | "friends"
+}
+
+model UserActionHistory {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  actionType  String
+  title       String
+  description String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([actionType])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model AiChatPersonalityConfig {
+  id              String   @id @default(cuid())
+  key             String   @unique
+  label           String
+  description     String
+  promptHint      String
+  systemPrompt    String?
+  avatarUrl       String?
+  isGated         Boolean  @default(false)
+  isDefault       Boolean  @default(false)
+  createdByUserId String?
+  createdByUser   User?    @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model AiChatSession {
+  id            String          @id @default(cuid())
+  userId        String
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String
+  modelId       String
+  personalityId String
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  messages      AiChatMessage[]
+}
+
+model AiChatMessage {
+  id        String        @id @default(cuid())
+  sessionId String
+  session   AiChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role      String
+  content   String
+  createdAt DateTime      @default(now())
+}
+
+model Z7iAccount {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  enrollmentNo      String // Z7I username/enrollment number
+  encryptedPassword String // Encrypted Z7I password
+
+  firstName String? // Z7I first name (from settings page)
+  isGuest   Boolean @default(false)
+
+  syncStatus String  @default("pending")
+
+  lastSyncAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  packages     Package[]
+  testAttempts TestAttempt[]
+}
+
+model Package {
+  id           String     @id @default(cuid())
+  z7iId        String // Original Z7I package ID
+  z7iAccountId String
+  z7iAccount   Z7iAccount @relation(fields: [z7iAccountId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  expiryDate  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tests Test[]
+
+  @@unique([z7iId, z7iAccountId])
+}
+
+model Test {
+  id        String  @id @default(cuid())
+  z7iId     String // Original Z7I test ID
+  packageId String
+  package   Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  name           String
+  description    String?
+  testType       String? // Practice, Live, etc.
+  timeLimit      Int? // in minutes
+  maxScore       Int?
+  totalQuestions Int?
+
+  startDate DateTime?
+  endDate   DateTime?
+
+  subjects Json? // Array of {subjectId, name, questionCount}
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attempts TestAttempt[]
+
+  @@unique([z7iId, packageId])
+}
+
+model TestAttempt {
+  id           String     @id @default(cuid())
+  z7iId        String // Original Z7I attempt/report ID
+  z7iAccountId String
+  z7iAccount   Z7iAccount @relation(fields: [z7iAccountId], references: [id], onDelete: Cascade)
+  testId       String
+  test         Test       @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  timeTaken  Float? // in minutes
+  submitDate DateTime?
+
+  correct     Int   @default(0)
+  incorrect   Int   @default(0)
+  unattempted Int   @default(0)
+  totalScore  Float @default(0)
+  maxScore    Int?
+
+  rank       Int?
+  percentile Float?
+  bonusMarks Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  responses QuestionResponse[]
+
+  @@unique([z7iId, z7iAccountId])
+}
+
+model QuestionResponse {
+  id            String      @id @default(cuid())
+  z7iQuestionId String // Original Z7I question ID
+  attemptId     String
+  attempt       TestAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  questionOrder Int // Order in the test (0-indexed)
+  subjectId     String? // Z7I subject ID
+  subjectName   String?
+
+  questionType String // MCQ, NAT, etc.
+  questionHtml String // Question content (HTML)
+
+  option1 String?
+  option2 String?
+  option3 String?
+  option4 String?
+
+  correctAnswer String // a, b, c, d or numeric for NAT
+  studentAnswer String? // What student selected
+  answerStatus  String // correct, incorrect, unattempted
+
+  marksPositive Float @default(4)
+  marksNegative Float @default(1)
+  scoreObtained Float @default(0)
+
+  timeTaken Int? // seconds spent on this question
+
+  avgTimeTaken   Int? // average time by all students
+  percentCorrect Float? // percentage of students who got it right
+
+  solutionHtml String?
+
+  aiSolutionHtml String?
+  aiGeneratedAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  bookmarks  QuestionBookmark[]
+  notes      QuestionNote[]
+  comments   QuestionComment[]
+  forumPosts ForumPost[]
+
+  @@unique([z7iQuestionId, attemptId])
+}
+
+model QuestionBookmark {
+  id         String           @id @default(cuid())
+  userId     String
+  questionId String
+  question   QuestionResponse @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, questionId])
+}
+
+model QuestionNote {
+  id         String           @id @default(cuid())
+  userId     String
+  questionId String
+  question   QuestionResponse @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  content String // Note content (markdown)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, questionId])
+}
+
+model UserLeagueProfile {
+  id                 String    @id @default(cuid())
+  userId             String    @unique
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  totalExp           Int       @default(0)
+  league             String? // Bronze, Silver, Gold, Diamond, Platinum, Mythic
+  stage              Int?
+  streakCount        Int       @default(0)
+  streakBonus        Int       @default(0)
+  lastPyqQualifiedAt DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+model UserExpEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  sourceId  String
+  exp       Int
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, type, sourceId])
+  @@index([userId, type])
+}
+
+model UserIpLog {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ip          String
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @updatedAt
+
+  @@unique([userId, ip])
+  @@index([userId])
+}
+
+model DeletedAccount {
+  id           String   @id @default(cuid())
+  email        String
+  name         String?
+  enrollmentNo String?
+  ips          Json?
+  deletedAt    DateTime @default(now())
+}
+
+model CustomTest {
+  id              String   @id @default(cuid())
+  name            String
+  prompt          String
+  modelId         String
+  timeLimit       Int // in minutes
+  totalQuestions  Int
+  status          String   @default("ready") // ready, generating, failed
+  createdByUserId String?
+  createdByUser   User?    @relation("CustomTestsCreated", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  questions CustomTestQuestion[]
+  attempts  CustomTestAttempt[]
+}
+
+model CustomTestQuestion {
+  id            String     @id @default(cuid())
+  testId        String
+  test          CustomTest @relation(fields: [testId], references: [id], onDelete: Cascade)
+  questionOrder Int
+  subject       String?
+  chapter       String?
+  difficulty    String?
+  questionType  String
+  questionHtml  String
+  option1       String?
+  option2       String?
+  option3       String?
+  option4       String?
+  correctAnswer String
+  marksPositive Float      @default(4)
+  marksNegative Float      @default(1)
+  diagramImageDataUrl String?
+  createdAt     DateTime   @default(now())
+
+  responses CustomTestResponse[]
+
+  @@unique([testId, questionOrder])
+}
+
+model CustomTestAttempt {
+  id                   String     @id @default(cuid())
+  testId               String
+  test                 CustomTest @relation(fields: [testId], references: [id], onDelete: Cascade)
+  userId               String
+  user                 User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status               String     @default("in_progress") // in_progress, submitted
+  startedAt            DateTime   @default(now())
+  submittedAt          DateTime?
+  timeTaken            Int? // seconds
+  currentQuestionIndex Int        @default(0)
+  correct              Int        @default(0)
+  incorrect            Int        @default(0)
+  unattempted          Int        @default(0)
+  totalScore           Float      @default(0)
+  maxScore             Int?
+  accuracy             Int?
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  responses CustomTestResponse[]
+
+  @@unique([testId, userId])
+}
+
+model CustomTestResponse {
+  id            String             @id @default(cuid())
+  attemptId     String
+  attempt       CustomTestAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId    String
+  question      CustomTestQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answer        String?
+  flagged       Boolean            @default(false)
+  timeSpent     Int                @default(0)
+  visited       Boolean            @default(false)
+  answerStatus  String?
+  marksObtained Float?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@unique([attemptId, questionId])
+}
+
+model QuestionComment {
+  id         String           @id @default(cuid())
+  userId     String
+  userName   String? // Cached user name for display
+  questionId String
+  question   QuestionResponse @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  content String // Comment content
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model BonusQuestion {
+  id            String @id @default(cuid())
+  z7iQuestionId String @unique // Original Z7I question ID (global across attempts)
+  testZ7iId     String // Z7I test ID for reference
+
+  reason       String? // Why this was marked as bonus
+  markedBy     String // Admin user ID who marked it
+  markedByName String? // Admin name for display
+
+  createdAt DateTime @default(now())
+}
+
+model AnswerKeyChange {
+  id            String @id @default(cuid())
+  z7iQuestionId String @unique // Original Z7I question ID (global across attempts)
+  testZ7iId     String // Z7I test ID for reference
+
+  originalAnswer String // Original correct answer from Z7I
+  newAnswer      String // Admin-corrected answer
+  reason         String? // Why the answer was changed
+
+  changedBy     String // Admin user ID who changed it
+  changedByName String? // Admin name for display
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TestRevision {
+  id        String @id @default(cuid())
+  userId    String // User who took the revision
+  attemptId String // Original TestAttempt being revised
+
+  correct     Int   @default(0)
+  incorrect   Int   @default(0)
+  unattempted Int   @default(0)
+  totalScore  Float @default(0)
+  maxScore    Int   @default(0)
+
+  timeTaken Int @default(0) // seconds
+
+  originalScore Float @default(0)
+  improvement   Float @default(0) // totalScore - originalScore
+
+  accuracy Float @default(0)
+
+  createdAt DateTime @default(now())
+
+  responses RevisionResponse[]
+}
+
+model RevisionResponse {
+  id         String       @id @default(cuid())
+  revisionId String
+  revision   TestRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+
+  z7iQuestionId String // Original Z7I question ID
+  questionOrder Int // Order in test
+
+  userAnswer    String? // What user selected (A, B, C, D)
+  correctAnswer String // The correct answer
+  status        String // correct, incorrect, unattempted
+
+  marksObtained Float @default(0)
+  marksPositive Float @default(4)
+  marksNegative Float @default(1)
+
+  timeSpent  Int     @default(0) // seconds on this question
+  wasFlagged Boolean @default(false)
+
+  createdAt DateTime @default(now())
+}
+
+model ScoreAdjustment {
+  id           String @id @default(cuid())
+  testZ7iId    String // Test this adjustment applies to
+  z7iAccountId String // User receiving the adjustment
+
+  adjustment Float // +/- marks adjustment
+  reason     String? // Why the adjustment was made
+
+  changedBy     String // Admin user ID who made the change
+  changedByName String? // Admin name for display
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([testZ7iId, z7iAccountId])
+}
+
+model ForumPost {
+  id       String @id @default(cuid())
+  userId   String
+  userName String // Cached user name for display
+
+  title          String // Post title
+  content        String // Post content (markdown supported)
+  attachmentName String? // Optional attached PDF file name
+  attachmentData String? // Optional attached PDF data (base64)
+
+  questionId String? // QuestionResponse ID if attached
+  question   QuestionResponse? @relation(fields: [questionId], references: [id], onDelete: SetNull)
+
+  likes     Int @default(0)
+  viewCount Int @default(0)
+
+  isPinned   Boolean @default(false)
+  isResolved Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  replies   ForumReply[]
+  postLikes ForumPostLike[]
+  mentions  ForumMention[]
+}
+
+model ForumReply {
+  id     String    @id @default(cuid())
+  postId String
+  post   ForumPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  userId   String
+  userName String // Cached user name for display
+
+  content String // Reply content (markdown supported)
+
+  isAccepted Boolean @default(false)
+
+  likes Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  replyLikes ForumReplyLike[]
+  mentions   ForumMention[]
+}
+
+model ForumPostLike {
+  id     String    @id @default(cuid())
+  postId String
+  post   ForumPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId String
+
+  createdAt DateTime @default(now())
+
+  @@unique([postId, userId])
+}
+
+model ForumReplyLike {
+  id      String     @id @default(cuid())
+  replyId String
+  reply   ForumReply @relation(fields: [replyId], references: [id], onDelete: Cascade)
+  userId  String
+
+  createdAt DateTime @default(now())
+
+  @@unique([replyId, userId])
+}
+
+model ForumMention {
+  id              String     @id @default(cuid())
+  postId          String
+  post            ForumPost  @relation(fields: [postId], references: [id], onDelete: Cascade)
+  replyId         String?    // null if mention is in the post itself
+  reply           ForumReply? @relation(fields: [replyId], references: [id], onDelete: Cascade)
+  mentionedUserId String
+  mentionedUser   User       @relation("MentionedUser", fields: [mentionedUserId], references: [id], onDelete: Cascade)
+  mentionerUserId String     // who wrote the mention
+  isRead          Boolean    @default(false)
+  createdAt       DateTime   @default(now())
+
+  @@index([mentionedUserId, isRead])
+}
+
+model PastYearPaper {
+  id String @id @default(cuid())
+
+  examName String // "JEE Main", "JEE Advanced", "NEET"
+  year     Int // 2024, 2023, etc.
+  session  String? // "January", "April", null for single session exams
+  shift    String? // "Paper 1", "Shift 1", etc.
+  date     DateTime? // Actual exam date
+
+  title       String // "JEE Main 2024 January Shift 1"
+  description String?
+
+  timeLimit      Int // in minutes (180 for JEE Main)
+  maxScore       Int // 300 for JEE Main
+  totalQuestions Int // 75 for JEE Main (25 per subject)
+
+  structure Json? // Array of {subject, mcqCount, natCount}
+
+  source    String? // "Official NTA", "Examside", "Manual Upload"
+  sourceUrl String? // Original source URL
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  questions PYPQuestion[]
+
+  attempts PYPAttempt[]
+
+  @@unique([examName, year, session, shift])
+}
+
+model PYPQuestion {
+  id      String        @id @default(cuid())
+  paperId String
+  paper   PastYearPaper @relation(fields: [paperId], references: [id], onDelete: Cascade)
+
+  questionNumber Int // 1-75 for JEE Main
+  subject        String // "Physics", "Chemistry", "Mathematics"
+  type           String // "MCQ", "NAT"
+
+  questionHtml String // Question content (HTML/LaTeX)
+
+  option1 String?
+  option2 String?
+  option3 String?
+  option4 String?
+
+  correctAnswer String // "a", "b", "c", "d" or numeric value
+  solutionHtml  String? // Detailed solution
+
+  marksPositive Float @default(4)
+  marksNegative Float @default(1)
+
+  difficulty     String? // "Easy", "Medium", "Hard"
+  avgTimeTaken   Int? // seconds
+  percentCorrect Float? // 0-100
+
+  topics Json // ["Mechanics", "Rotation", "Angular Momentum"]
+
+  createdAt DateTime @default(now())
+
+  bookmarks PYPBookmark[]
+  notes     PYPNote[]
+
+  @@unique([paperId, questionNumber])
+}
+
+model PYPAttempt {
+  id      String        @id @default(cuid())
+  userId  String
+  paperId String
+  paper   PastYearPaper @relation(fields: [paperId], references: [id], onDelete: Cascade)
+
+  startedAt   DateTime  @default(now())
+  submittedAt DateTime?
+  timeTaken   Float? // in minutes
+
+  correct     Int   @default(0)
+  incorrect   Int   @default(0)
+  unattempted Int   @default(0)
+  totalScore  Float @default(0)
+
+  physicsScore   Float?
+  chemistryScore Float?
+  mathsScore     Float?
+
+  answers Json // {questionId: {answer, timeTaken, flagged}}
+
+  topicStats              Json?
+  revisionRecommendations Json?
+
+  isCompleted Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, paperId, startedAt])
+}
+
+model PYPBookmark {
+  id         String      @id @default(cuid())
+  userId     String
+  questionId String
+  question   PYPQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, questionId])
+}
+
+model PYPNote {
+  id         String      @id @default(cuid())
+  userId     String
+  questionId String
+  question   PYPQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  content String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, questionId])
+}
+
+model PyqQuestionAttempt {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId          String
+  examId              String?
+  subjectId           String?
+  chapterId           String?
+  questionNumber      Int?
+  selectedOptionIndex Int?
+  answerLabel         String?
+  correctAnswer       String?
+  isCorrect           Boolean?
+  timeTaken           Int?
+  createdAt           DateTime @default(now())
+
+  @@index([userId, questionId])
+  @@index([userId, createdAt])
+}
+
+model ChatMessage {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName         String   // Cached user name for display
+  userProfileImage String?  // Cached profile image URL
+  content          String   // Message text (markdown supported)
+  attachmentUrl    String?  // Base64 data URI or HTTP URL for image/video
+  attachmentType   String?  // "image" or "video"
+  attachmentSize   Int?     // Size in bytes of the attachment
+  forwardedQuestionId String? // Bookmarked question forwarded into chat
+  replyToMessageId String?
+  replyToMessage   ChatMessage? @relation("ChatMessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies          ChatMessage[] @relation("ChatMessageReplies")
+  chatType         String   @default("global") // "global" | "direct" | "group"
+  recipientId      String?
+  recipient        User?    @relation("DirectMessageRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  groupId          String?
+  group            ChatGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  isPinned         Boolean  @default(false)
+  editedAt         DateTime?
+  isDeleted        Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  reactions ChatReaction[]
+  reads     ChatMessageRead[]
+  mentions  ChatMention[]
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([recipientId, createdAt])
+  @@index([groupId, createdAt])
+  @@index([replyToMessageId])
+  @@index([chatType, createdAt])
+}
+
+model ChatGroup {
+  id                String            @id @default(cuid())
+  name              String
+  profileImageUrl   String?
+  createdByUserId   String
+  createdByUser     User              @relation("ChatGroupCreator", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  members           ChatGroupMember[]
+  messages          ChatMessage[]
+
+  @@index([createdByUserId])
+}
+
+model ChatGroupMember {
+  id          String    @id @default(cuid())
+  groupId     String
+  group       ChatGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@unique([groupId, userId])
+  @@index([userId])
+}
+
+model ChatMention {
+  id            String      @id @default(cuid())
+  messageId     String
+  message       ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  mentionedUserId String
+  mentionedUser User        @relation(fields: [mentionedUserId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now())
+
+  @@unique([messageId, mentionedUserId])
+  @@index([mentionedUserId])
+}
+
+model ChatReaction {
+  id        String      @id @default(cuid())
+  messageId String
+  message   ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emoji     String      // e.g. "👍", "❤️", "😂", "😮", "😢", "🔥"
+  createdAt DateTime    @default(now())
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+}
+
+model ChatMessageRead {
+  id        String      @id @default(cuid())
+  messageId String
+  message   ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  readAt    DateTime    @default(now())
+
+  @@unique([messageId, userId])
+  @@index([userId])
+}
+
+model Announcement {
+  id              String   @id @default(cuid())
+  title           String
+  content         String   // Announcement body (markdown supported)
+  createdByUserId String
+  createdByUser   User     @relation("AnnouncementCreator", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  reads AnnouncementRead[]
+}
+
+model AnnouncementRead {
+  id             String       @id @default(cuid())
+  announcementId String
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  readAt         DateTime     @default(now())
+
+  @@unique([announcementId, userId])
+  @@index([userId])
+}
+
+model FriendRequest {
+  id         String   @id @default(cuid())
+  senderId   String
+  sender     User     @relation("FriendRequestSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  receiver   User     @relation("FriendRequestReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  status     String   @default("pending") // "pending" | "accepted" | "rejected"
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([senderId, receiverId])
+  @@index([receiverId, status])
+}
+
+model UserBlock {
+  id        String   @id @default(cuid())
+  blockerId String
+  blocker   User     @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedId String
+  blocked   User     @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([blockerId, blockedId])
+  @@index([blockerId])
+}
+
+model PyqQuestionState {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId   String
+  examId       String?
+  subjectId    String?
+  chapterId    String?
+  isBookmarked Boolean  @default(false)
+  note         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, questionId])
+  @@index([userId, chapterId])
+}

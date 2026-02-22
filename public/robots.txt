@@ -1,0 +1,29 @@
+User-agent: *
+Allow: /
+Allow: /privacy
+
+Disallow: /dashboard
+Disallow: /bookmarks
+Disallow: /forum
+Disallow: /pyp
+Disallow: /time-intel
+Disallow: /owner
+Disallow: /ai-chats
+Disallow: /zone
+Disallow: /league
+Disallow: /test/
+Disallow: /api/
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+Sitemap: https://z7i.vercel.app/sitemap.xml

@@ -1,0 +1,712 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { prisma } from '../../lib/api/prisma.js';
+import { verifyToken } from '../../lib/api/auth.js';
+import type { QuestionData } from '../../lib/api/ai-service.js';
+
+const CATALOG_URL = 'https://raw.githubusercontent.com/medriid/pyq/main/catalog.json';
+const RAW_BASE = 'https://raw.githubusercontent.com/medriid/pyq/main/';
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const WATERMARK_REMOVER_PROXY = process.env.WATERMARK_REMOVER_PROXY?.trim();
+
+type CatalogChapter = {
+  name: string;
+  display?: string | null;
+  path: string;
+  chapter_index: string;
+};
+
+type CatalogSubject = {
+  name: string;
+  display?: string | null;
+  chapters: CatalogChapter[];
+};
+
+type CatalogExam = {
+  name: string;
+  display?: string | null;
+  subjects: CatalogSubject[];
+};
+
+type Catalog = {
+  root: string;
+  exams: CatalogExam[];
+};
+
+type ChapterIndex = {
+  questions_exported?: number;
+  questions_reported_by_api?: number;
+  question_paths: string[];
+};
+
+type CacheEntry<T> = {
+  value: T;
+  expiresAt: number;
+};
+
+const catalogCache: { entry?: CacheEntry<Catalog> } = {};
+const chapterIndexCache = new Map<string, CacheEntry<ChapterIndex>>();
+const chapterQuestionsCache = new Map<string, CacheEntry<any[]>>();
+
+function setCorsHeaders(res: VercelResponse) {
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+}
+
+function getAuth(req: VercelRequest) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  return verifyToken(authHeader.substring(7));
+}
+
+function getRequiredQuery(req: VercelRequest, key: string): string | null {
+  const value = req.query[key];
+  return typeof value === 'string' ? value : null;
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Request failed (${res.status}): ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+function slugToTitle(value: string) {
+  return value
+    .split('__')[0]
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function displayName(name: string, display?: string | null) {
+  if (display && display.trim()) return display.trim();
+  return slugToTitle(name);
+}
+
+function applyWatermarkProxy(url: string) {
+  if (!WATERMARK_REMOVER_PROXY) return url;
+  return `${WATERMARK_REMOVER_PROXY}${encodeURIComponent(url)}`;
+}
+
+function normalizeAssetHtml(html: string | undefined, questionPathBase: string) {
+  if (!html) return '';
+  const withBase = html.replace(/src=(["'])assets[\\/]/g, `src=$1${questionPathBase}assets/`);
+  const assetRegex = /src=(["'])(https?:\/\/[^"']+)/g;
+  return withBase.replace(assetRegex, (_match: string, quote: string, src: string) => {
+    return `src=${quote}${applyWatermarkProxy(src)}`;
+  });
+}
+
+function buildAssetUrl(questionPathBase: string, assetPath: string | undefined) {
+  if (!assetPath) return '';
+  const normalized = assetPath.replace(/\\/g, '/');
+  const resolved = normalized.startsWith('http') ? normalized : `${questionPathBase}${normalized}`;
+  return applyWatermarkProxy(resolved);
+}
+
+function buildQuestionHtml(text: string | undefined, image: string | undefined, questionPathBase: string) {
+  const safeText = normalizeAssetHtml(text, questionPathBase);
+  const imageUrl = buildAssetUrl(questionPathBase, image);
+  const imageHtml = imageUrl ? `<div class="pyp-question-media"><img src="${imageUrl}" alt="Question visual" /></div>` : '';
+  return `${safeText}${imageHtml}`;
+}
+
+function buildOptionHtml(text: string | undefined, image: string | undefined, questionPathBase: string) {
+  const safeText = normalizeAssetHtml(text, questionPathBase);
+  const imageUrl = buildAssetUrl(questionPathBase, image);
+  const imageHtml = imageUrl ? `<img src="${imageUrl}" alt="Option visual" />` : '';
+  return `${safeText}${imageHtml}`;
+}
+
+async function getCatalog(): Promise<Catalog> {
+  if (catalogCache.entry && catalogCache.entry.expiresAt > Date.now()) {
+    return catalogCache.entry.value;
+  }
+  const catalog = await fetchJson<Catalog>(CATALOG_URL);
+  catalogCache.entry = { value: catalog, expiresAt: Date.now() + CACHE_TTL_MS };
+  return catalog;
+}
+
+async function getChapterIndex(catalog: Catalog, chapter: CatalogChapter): Promise<ChapterIndex> {
+  const cacheKey = chapter.chapter_index;
+  const cached = chapterIndexCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const url = `${RAW_BASE}${catalog.root}/${chapter.chapter_index}`;
+  const data = await fetchJson<ChapterIndex>(url);
+  chapterIndexCache.set(cacheKey, { value: data, expiresAt: Date.now() + CACHE_TTL_MS });
+  return data;
+}
+
+function normalizeExam(exam: CatalogExam) {
+  return { id: exam.name, name: displayName(exam.name, exam.display) };
+}
+
+function normalizeSubject(subject: CatalogSubject) {
+  return { id: subject.name, name: displayName(subject.name, subject.display) };
+}
+
+function normalizeChapter(chapter: CatalogChapter, questionCount?: number) {
+  return {
+    id: chapter.name,
+    name: displayName(chapter.name, chapter.display),
+    questionCount,
+  };
+}
+
+async function handleExams(res: VercelResponse) {
+  const catalog = await getCatalog();
+  const exams = catalog.exams.map(normalizeExam);
+  return res.status(200).json({ success: true, data: { items: exams } });
+}
+
+async function handleSubjects(req: VercelRequest, res: VercelResponse) {
+  const examId = getRequiredQuery(req, 'examId');
+  if (!examId) return res.status(400).json({ error: 'examId is required' });
+  const catalog = await getCatalog();
+  const exam = catalog.exams.find((entry) => entry.name === examId);
+  if (!exam) return res.status(404).json({ error: 'Exam not found' });
+  const subjects = exam.subjects.map(normalizeSubject);
+  return res.status(200).json({ success: true, data: { items: subjects } });
+}
+
+async function handleChapters(req: VercelRequest, res: VercelResponse) {
+  const examId = getRequiredQuery(req, 'examId');
+  const subjectId = getRequiredQuery(req, 'subjectId');
+  if (!examId || !subjectId) {
+    return res.status(400).json({ error: 'examId and subjectId are required' });
+  }
+  const catalog = await getCatalog();
+  const exam = catalog.exams.find((entry) => entry.name === examId);
+  if (!exam) return res.status(404).json({ error: 'Exam not found' });
+  const subject = exam.subjects.find((entry) => entry.name === subjectId);
+  if (!subject) return res.status(404).json({ error: 'Subject not found' });
+
+  const chaptersWithCounts = await Promise.all(
+    subject.chapters.map(async (chapter) => {
+      try {
+        const index = await getChapterIndex(catalog, chapter);
+        const count = index.questions_exported ?? index.questions_reported_by_api;
+        return normalizeChapter(chapter, typeof count === 'number' ? count : undefined);
+      } catch {
+        return normalizeChapter(chapter);
+      }
+    })
+  );
+
+  return res.status(200).json({ success: true, data: { items: chaptersWithCounts } });
+}
+
+async function handleQuestions(req: VercelRequest, res: VercelResponse) {
+  const examId = getRequiredQuery(req, 'examId');
+  const subjectId = getRequiredQuery(req, 'subjectId');
+  const chapterId = getRequiredQuery(req, 'chapterId');
+  if (!examId || !subjectId || !chapterId) {
+    return res.status(400).json({ error: 'examId, subjectId, and chapterId are required' });
+  }
+  const catalog = await getCatalog();
+  const exam = catalog.exams.find((entry) => entry.name === examId);
+  if (!exam) return res.status(404).json({ error: 'Exam not found' });
+  const subject = exam.subjects.find((entry) => entry.name === subjectId);
+  if (!subject) return res.status(404).json({ error: 'Subject not found' });
+  const chapter = subject.chapters.find((entry) => entry.name === chapterId);
+  if (!chapter) return res.status(404).json({ error: 'Chapter not found' });
+
+  const cacheKey = `${examId}:${subjectId}:${chapterId}`;
+  const cached = chapterQuestionsCache.get(cacheKey);
+  let baseQuestions = cached?.value;
+  if (!baseQuestions || !cached || cached.expiresAt <= Date.now()) {
+    const index = await getChapterIndex(catalog, chapter);
+    const basePath = `${RAW_BASE}${catalog.root}/${chapter.path}/`;
+    const questionPayloads = await Promise.all(
+      index.question_paths.map(async (questionPath, questionIndex) => {
+        const payloadCandidates = [
+          `${basePath}${questionPath}/payload.json`,
+          `${basePath}${questionPath}.json`,
+          `${basePath}${questionPath}`,
+        ];
+
+        let payload: any = null;
+        let payloadUrl = payloadCandidates[0];
+        let lastError: unknown = null;
+
+        for (const candidateUrl of payloadCandidates) {
+          try {
+            payload = await fetchJson<any>(candidateUrl);
+            payloadUrl = candidateUrl;
+            break;
+          } catch (error) {
+            lastError = error;
+          }
+        }
+
+        if (!payload) {
+          throw lastError instanceof Error ? lastError : new Error('Unable to load PYQ payload');
+        }
+
+        const questionPathBase = payloadUrl.endsWith('/payload.json')
+          ? payloadUrl.slice(0, -'payload.json'.length)
+          : `${basePath}${questionPath}/`;
+        const questionPathKey = questionPath.replace(/[^a-zA-Z0-9_-]+/g, '-');
+        const questionNumber = typeof payload?.index === 'number' ? payload.index + 1 : questionIndex + 1;
+
+        return {
+          id: payload?.id ?? `${chapterId}-${questionPathKey}`,
+          questionNumber,
+          subject: payload?.tags?.subject_name ?? payload?.subject ?? displayName(subject.name, subject.display),
+          type: payload?.type ?? payload?.question_type ?? '',
+          questionHtml: buildQuestionHtml(payload?.question?.text, payload?.question?.image, questionPathBase),
+          options: Array.isArray(payload?.options)
+            ? payload.options.map((opt: any) => buildOptionHtml(opt?.text, opt?.image, questionPathBase))
+            : [],
+          answer: Array.isArray(payload?.correct_answer)
+            ? payload.correct_answer.join(', ')
+            : payload?.correct_answer ?? '',
+          solutionHtml: buildQuestionHtml(payload?.solution?.text, payload?.solution?.image, questionPathBase),
+          pyqInfo: payload?.pyq_info ?? '',
+        };
+      })
+    );
+    baseQuestions = questionPayloads.sort((a, b) => (a.questionNumber ?? 0) - (b.questionNumber ?? 0));
+    chapterQuestionsCache.set(cacheKey, { value: baseQuestions, expiresAt: Date.now() + CACHE_TTL_MS });
+  }
+
+  const questionIds = baseQuestions.map((item) => item.id);
+  const attempts = await prisma.pyqQuestionAttempt.findMany({
+    where: { questionId: { in: questionIds } },
+    select: { questionId: true, isCorrect: true, timeTaken: true },
+  });
+
+  const statsMap = new Map<
+    string,
+    { totalAttempts: number; correct: number; incorrect: number; timeSum: number; timeCount: number }
+  >();
+
+  attempts.forEach((attempt) => {
+    const existing = statsMap.get(attempt.questionId) ?? {
+      totalAttempts: 0,
+      correct: 0,
+      incorrect: 0,
+      timeSum: 0,
+      timeCount: 0,
+    };
+    existing.totalAttempts += 1;
+    if (attempt.isCorrect === true) existing.correct += 1;
+    if (attempt.isCorrect === false) existing.incorrect += 1;
+    if (typeof attempt.timeTaken === 'number' && attempt.timeTaken > 0) {
+      existing.timeSum += attempt.timeTaken;
+      existing.timeCount += 1;
+    }
+    statsMap.set(attempt.questionId, existing);
+  });
+
+  const withStats = baseQuestions.map((question) => {
+    const stats = statsMap.get(question.id);
+    return {
+      ...question,
+      attemptStats: stats
+        ? {
+            totalAttempts: stats.totalAttempts,
+            correct: stats.correct,
+            incorrect: stats.incorrect,
+            averageTime: stats.timeCount > 0 ? Math.round(stats.timeSum / stats.timeCount) : null,
+            timeCount: stats.timeCount,
+          }
+        : null,
+    };
+  });
+
+  return res.status(200).json({ success: true, data: { items: withStats } });
+}
+
+
+
+function stripHtmlToText(html: string | undefined) {
+  if (!html) return '';
+  return html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function hasOfficialSolution(solutionHtml: string | undefined) {
+  const text = stripHtmlToText(solutionHtml);
+  if (!text) return false;
+  return !/solution\s+coming\s+soon/i.test(text);
+}
+
+async function handleGenerateAiSolution(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'Authentication required' });
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  const user = await prisma.user.findUnique({
+    where: { id: payload.userId },
+    select: { canUseAiSolutions: true, isOwner: true },
+  });
+
+  if (!user || (!user.canUseAiSolutions && !user.isOwner)) {
+    return res.status(403).json({ error: 'AI solutions access required' });
+  }
+
+  const {
+    questionId,
+    questionHtml,
+    options,
+    answer,
+    type,
+    subject,
+    solutionHtml,
+    model,
+  } = req.body as {
+    questionId?: string;
+    questionHtml?: string;
+    options?: string[];
+    answer?: string;
+    type?: string;
+    subject?: string;
+    solutionHtml?: string;
+    model?: 'flash' | 'lite' | '3-12b' | '3-flash';
+  };
+
+  if (!questionId || !questionHtml || !answer) {
+    return res.status(400).json({ error: 'questionId, questionHtml, and answer are required' });
+  }
+
+  if (hasOfficialSolution(solutionHtml)) {
+    return res.status(400).json({ error: 'Official solution already exists for this question' });
+  }
+
+  try {
+    const { generateSolution, isGeminiConfigured } = await import('../../lib/api/ai-service.js');
+
+    if (!isGeminiConfigured()) {
+      return res.status(503).json({
+        error: 'AI service not configured',
+        details: 'Gemini API key is not set. Please configure GEMINI_API_KEY environment variable.',
+      });
+    }
+
+    const safeOptions = Array.isArray(options) ? options : [];
+    const question: QuestionData = {
+      questionHtml,
+      option1: safeOptions[0] || null,
+      option2: safeOptions[1] || null,
+      option3: safeOptions[2] || null,
+      option4: safeOptions[3] || null,
+      correctAnswer: answer,
+      questionType: type || null,
+      subjectName: subject || null,
+    };
+
+    const result = await generateSolution(question, { model });
+
+    if (!result.isCorrect) {
+      return res.status(200).json({
+        success: false,
+        mistaken: true,
+        questionId,
+        aiAnswer: result.aiAnswer,
+        correctAnswer: answer,
+        modelUsed: result.modelUsed,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      questionId,
+      aiSolutionHtml: result.html,
+      aiAnswer: result.aiAnswer,
+      modelUsed: result.modelUsed,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('PYQ AI solution generation error:', error);
+    return res.status(500).json({ error: 'Failed to generate AI solution', details: message });
+  }
+}
+
+async function handleAiDoubt(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'Authentication required' });
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  const user = await prisma.user.findUnique({
+    where: { id: payload.userId },
+    select: { canUseAiSolutions: true, isOwner: true },
+  });
+
+  if (!user || (!user.canUseAiSolutions && !user.isOwner)) {
+    return res.status(403).json({ error: 'AI solutions access required' });
+  }
+
+  const { questionId, aiSolution, doubt, model, question } = req.body as {
+    questionId?: string;
+    aiSolution?: string;
+    doubt?: string;
+    model?: 'flash' | 'lite' | '3-12b' | '3-flash';
+    question?: QuestionData;
+  };
+
+  if (!questionId || !aiSolution || !doubt || !question?.questionHtml || !question.correctAnswer) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    const { generateDoubtResponse, isGeminiConfigured } = await import('../../lib/api/ai-service.js');
+
+    if (!isGeminiConfigured()) {
+      return res.status(503).json({
+        error: 'AI service not configured',
+        details: 'Gemini API key is not set. Please configure GEMINI_API_KEY environment variable.',
+      });
+    }
+
+    const response = await generateDoubtResponse(question, aiSolution, doubt, { model });
+    return res.status(200).json({ success: true, response });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('PYQ AI doubt error:', error);
+    return res.status(500).json({ error: message || 'Failed to get AI doubt response.' });
+  }
+}
+
+async function handleSaveAttempt(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'Authentication required' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const {
+    questionId,
+    examId,
+    subjectId,
+    chapterId,
+    questionNumber,
+    selectedOptionIndex,
+    answerLabel,
+    correctAnswer,
+    isCorrect,
+    timeTaken,
+  } = req.body as {
+    questionId?: string;
+    examId?: string;
+    subjectId?: string;
+    chapterId?: string;
+    questionNumber?: number;
+    selectedOptionIndex?: number;
+    answerLabel?: string;
+    correctAnswer?: string;
+    isCorrect?: boolean | null;
+    timeTaken?: number;
+  };
+
+  if (!questionId) {
+    return res.status(400).json({ error: 'questionId is required' });
+  }
+
+  const attempt = await prisma.pyqQuestionAttempt.create({
+    data: {
+      userId: payload.userId,
+      questionId,
+      examId: examId || null,
+      subjectId: subjectId || null,
+      chapterId: chapterId || null,
+      questionNumber: typeof questionNumber === 'number' ? questionNumber : null,
+      selectedOptionIndex: typeof selectedOptionIndex === 'number' ? selectedOptionIndex : null,
+      answerLabel: answerLabel || null,
+      correctAnswer: correctAnswer || null,
+      isCorrect: typeof isCorrect === 'boolean' ? isCorrect : null,
+      timeTaken: typeof timeTaken === 'number' ? timeTaken : null,
+    },
+  });
+
+  return res.status(201).json({ success: true, attempt: { id: attempt.id, createdAt: attempt.createdAt } });
+}
+
+async function handleAttempts(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'Authentication required' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { questionIds } = req.body as { questionIds?: string[] };
+  if (!Array.isArray(questionIds) || questionIds.length === 0) {
+    return res.status(400).json({ error: 'questionIds is required' });
+  }
+
+  const attempts = await prisma.pyqQuestionAttempt.findMany({
+    where: {
+      userId: payload.userId,
+      questionId: { in: questionIds },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const latestByQuestion = new Map<string, typeof attempts[number]>();
+  attempts.forEach((attempt) => {
+    if (!latestByQuestion.has(attempt.questionId)) {
+      latestByQuestion.set(attempt.questionId, attempt);
+    }
+  });
+
+  const latest = Array.from(latestByQuestion.values()).map((attempt) => ({
+    questionId: attempt.questionId,
+    selectedOptionIndex: attempt.selectedOptionIndex,
+    answerLabel: attempt.answerLabel,
+    correctAnswer: attempt.correctAnswer,
+    isCorrect: attempt.isCorrect,
+    timeTaken: attempt.timeTaken,
+    createdAt: attempt.createdAt,
+  }));
+
+  return res.status(200).json({ success: true, attempts: latest });
+}
+
+
+async function handleSaveState(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'Authentication required' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const {
+    questionId,
+    examId,
+    subjectId,
+    chapterId,
+    isBookmarked,
+    note,
+  } = req.body as {
+    questionId?: string;
+    examId?: string;
+    subjectId?: string;
+    chapterId?: string;
+    isBookmarked?: boolean;
+    note?: string | null;
+  };
+
+  if (!questionId) {
+    return res.status(400).json({ error: 'questionId is required' });
+  }
+
+  const normalizedNote = typeof note === 'string' ? note.trim() : '';
+
+  const state = await prisma.pyqQuestionState.upsert({
+    where: {
+      userId_questionId: {
+        userId: payload.userId,
+        questionId,
+      },
+    },
+    update: {
+      examId: examId || null,
+      subjectId: subjectId || null,
+      chapterId: chapterId || null,
+      isBookmarked: typeof isBookmarked === 'boolean' ? isBookmarked : false,
+      note: normalizedNote.length > 0 ? normalizedNote : null,
+    },
+    create: {
+      userId: payload.userId,
+      questionId,
+      examId: examId || null,
+      subjectId: subjectId || null,
+      chapterId: chapterId || null,
+      isBookmarked: typeof isBookmarked === 'boolean' ? isBookmarked : false,
+      note: normalizedNote.length > 0 ? normalizedNote : null,
+    },
+  });
+
+  return res.status(200).json({
+    success: true,
+    state: {
+      questionId: state.questionId,
+      isBookmarked: state.isBookmarked,
+      note: state.note,
+      updatedAt: state.updatedAt,
+    },
+  });
+}
+
+async function handleStates(req: VercelRequest, res: VercelResponse) {
+  const payload = getAuth(req);
+  if (!payload) return res.status(401).json({ error: 'Authentication required' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { questionIds } = req.body as { questionIds?: string[] };
+  if (!Array.isArray(questionIds) || questionIds.length === 0) {
+    return res.status(400).json({ error: 'questionIds is required' });
+  }
+
+  const states = await prisma.pyqQuestionState.findMany({
+    where: {
+      userId: payload.userId,
+      questionId: { in: questionIds },
+    },
+    select: {
+      questionId: true,
+      isBookmarked: true,
+      note: true,
+      updatedAt: true,
+    },
+  });
+
+  return res.status(200).json({
+    success: true,
+    states: states.map((state) => ({
+      questionId: state.questionId,
+      isBookmarked: state.isBookmarked,
+      note: state.note,
+      updatedAt: state.updatedAt,
+    })),
+  });
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  setCorsHeaders(res);
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  const action = typeof req.query.action === 'string' ? req.query.action : '';
+
+  try {
+    switch (action) {
+      case 'exams':
+        return await handleExams(res);
+      case 'subjects':
+        return await handleSubjects(req, res);
+      case 'chapters':
+        return await handleChapters(req, res);
+      case 'questions':
+        return await handleQuestions(req, res);
+      case 'save-attempt':
+        return await handleSaveAttempt(req, res);
+      case 'attempts':
+        return await handleAttempts(req, res);
+      case 'save-state':
+        return await handleSaveState(req, res);
+      case 'states':
+        return await handleStates(req, res);
+      case 'generate-ai-solution':
+        return await handleGenerateAiSolution(req, res);
+      case 'ai-doubt':
+        return await handleAiDoubt(req, res);
+      default:
+        return res.status(400).json({ error: 'Unknown action' });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('PYQ proxy error:', error);
+    return res.status(500).json({ error: 'Internal server error', details: message });
+  }
+}
